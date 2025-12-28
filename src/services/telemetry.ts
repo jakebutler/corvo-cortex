@@ -143,6 +143,7 @@ export class TelemetryService {
       ...params
     };
 
+    // eslint-disable-next-line no-console -- Intentional logging for telemetry
     console.log(JSON.stringify(logEntry));
   }
 

@@ -12,7 +12,7 @@ export async function createStreamingResponse(upstreamResponse: Response): Promi
   }
 
   const reader = upstreamResponse.body.getReader();
-  const decoder = new TextDecoder();
+  const _decoder = new TextDecoder();
 
   const stream = new ReadableStream({
     async start(controller) {

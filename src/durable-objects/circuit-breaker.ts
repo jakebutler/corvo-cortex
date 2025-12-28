@@ -1,4 +1,4 @@
-import type { CircuitState, CircuitBreakerState } from '../types';
+import type { CircuitState } from '../types';
 
 /**
  * Circuit Breaker Durable Object

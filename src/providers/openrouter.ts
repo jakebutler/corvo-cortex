@@ -33,7 +33,7 @@ export class OpenRouterAdapter implements ProviderAdapter {
   /**
    * OpenRouter SSE chunks are OpenAI-compatible
    */
-  transformStreamChunk(chunk: string, model: string): string {
+  transformStreamChunk(chunk: string, _model: string): string {
     // OpenRouter SSE format is compatible with OpenAI
     // Just return as-is
     if (chunk.startsWith('data: ')) {

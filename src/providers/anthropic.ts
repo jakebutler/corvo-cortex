@@ -117,13 +117,17 @@ export class AnthropicAdapter implements ProviderAdapter {
   }
 
   private mapStopReason(reason: string): string {
-    const mapping: Record<string, string> = {
-      'end_turn': 'stop',
-      'max_tokens': 'length',
-      'stop_sequence': 'stop',
-      'tool_use': 'stop'
-    };
-    return mapping[reason] || 'stop';
+    // Use switch to avoid dynamic object access (security rule)
+    switch (reason) {
+      case 'end_turn':
+      case 'stop_sequence':
+      case 'tool_use':
+        return 'stop';
+      case 'max_tokens':
+        return 'length';
+      default:
+        return 'stop';
+    }
   }
 }
 

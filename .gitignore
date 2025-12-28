@@ -30,3 +30,6 @@ coverage/
 
 # Build outputs
 *.log
+
+# Analysis reports (auto-generated)
+reports/

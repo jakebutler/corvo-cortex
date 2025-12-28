@@ -106,9 +106,11 @@ export class Logger {
 
     switch (level) {
       case LogLevel.DEBUG:
+        // eslint-disable-next-line no-console -- Intentional debug logging
         console.debug(logString);
         break;
       case LogLevel.INFO:
+        // eslint-disable-next-line no-console -- Intentional info logging
         console.info(logString);
         break;
       case LogLevel.WARN:
