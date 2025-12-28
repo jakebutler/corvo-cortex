@@ -1,0 +1,71 @@
+name = "corvo-cortex"
+main = "src/index.ts"
+compatibility_date = "2024-01-01"
+
+# KV Namespaces
+# NOTE: Update these IDs after creating production namespaces
+[[kv_namespaces]]
+binding = "CORTEX_CLIENTS"
+id = "test_clients_namespace"
+preview_id = "test_clients_namespace_preview"
+
+[[kv_namespaces]]
+binding = "CORTEX_CONFIG"
+id = "test_config_namespace"
+preview_id = "test_config_namespace_preview"
+
+# Durable Objects
+[[durable_objects.bindings]]
+name = "CIRCUIT_BREAKER"
+class_name = "CircuitBreaker"
+
+# Migrations
+[[migrations]]
+tag = "v1"
+new_classes = ["CircuitBreaker"]
+
+# Environment variables
+[vars]
+ENVIRONMENT = "development"
+
+# Credit flags (set via wrangler variable put)
+# CREDITS_ANTHROPIC = "true"
+# CREDITS_OPENAI = "true"
+
+# Production secrets (set via: wrangler secret put <NAME> --env production)
+# ANTHROPIC_API_KEY
+# OPENAI_API_KEY
+# ZAI_API_KEY
+# OPENROUTER_API_KEY
+# LANGFUSE_PUBLIC_KEY
+# LANGFUSE_SECRET_KEY
+
+# Production configuration
+[env.production]
+name = "corvo-cortex-pro"
+
+# Production KV Namespaces (update after creation)
+[[env.production.kv_namespaces]]
+binding = "CORTEX_CLIENTS"
+id = "PROD_CLIENTS_NAMESPACE_ID"
+preview_id = "PROD_CLIENTS_NAMESPACE_PREVIEW_ID"
+
+[[env.production.kv_namespaces]]
+binding = "CORTEX_CONFIG"
+id = "PROD_CONFIG_NAMESPACE_ID"
+preview_id = "PROD_CONFIG_NAMESPACE_PREVIEW_ID"
+
+# Production Durable Objects
+[[env.production.durable_objects.bindings]]
+name = "CIRCUIT_BREAKER"
+class_name = "CircuitBreaker"
+
+[[env.production.migrations]]
+tag = "v1"
+new_classes = ["CircuitBreaker"]
+
+# Production Environment Variables and Credit Flags
+[env.production.vars]
+ENVIRONMENT = "production"
+CREDITS_ANTHROPIC = "true"
+CREDITS_OPENAI = "true"
