@@ -2,7 +2,7 @@ import { MiddlewareHandler } from 'hono';
 import type { Env, Variables, ClientConfig, RateLimitUsage } from '../types';
 
 declare module 'hono' {
-  interface ContextVariableMap extends Variables {}
+  type ContextVariableMap = Variables;
 }
 
 /**

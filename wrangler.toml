@@ -22,7 +22,7 @@ class_name = "CircuitBreaker"
 # Migrations
 [[migrations]]
 tag = "v1"
-new_classes = ["CircuitBreaker"]
+new_sqlite_classes = ["CircuitBreaker"]
 
 # Environment variables
 [vars]
@@ -44,16 +44,16 @@ ENVIRONMENT = "development"
 [env.production]
 name = "corvo-cortex-pro"
 
-# Production KV Namespaces (update after creation)
+# Production KV Namespaces (preview namespaces are separate from production)
 [[env.production.kv_namespaces]]
 binding = "CORTEX_CLIENTS"
-id = "PROD_CLIENTS_NAMESPACE_ID"
-preview_id = "PROD_CLIENTS_NAMESPACE_PREVIEW_ID"
+id = "8607bc102781438a8e1ea9d481a5a12b"
+preview_id = "4ca65fdcb36c4352a6992e6775e52862"
 
 [[env.production.kv_namespaces]]
 binding = "CORTEX_CONFIG"
-id = "PROD_CONFIG_NAMESPACE_ID"
-preview_id = "PROD_CONFIG_NAMESPACE_PREVIEW_ID"
+id = "37c450a7bdc74db4aebff10aac98ff57"
+preview_id = "ae27bfa48e1a478cb2344c543cea106a"
 
 # Production Durable Objects
 [[env.production.durable_objects.bindings]]
@@ -62,7 +62,7 @@ class_name = "CircuitBreaker"
 
 [[env.production.migrations]]
 tag = "v1"
-new_classes = ["CircuitBreaker"]
+new_sqlite_classes = ["CircuitBreaker"]
 
 # Production Environment Variables and Credit Flags
 [env.production.vars]

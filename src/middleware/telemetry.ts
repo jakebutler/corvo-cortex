@@ -3,7 +3,7 @@ import type { Env, Variables } from '../types';
 import { createTelemetryService } from '../services/telemetry';
 
 declare module 'hono' {
-  interface ContextVariableMap extends Variables {}
+  type ContextVariableMap = Variables;
 }
 
 /**

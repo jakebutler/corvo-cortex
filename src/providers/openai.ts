@@ -15,14 +15,14 @@ export class OpenAIAdapter implements ProviderAdapter {
   /**
    * OpenAI response is already in correct format
    */
-  transformResponse(response: unknown, model: string): ChatCompletionResponse {
+  transformResponse(response: unknown, _model: string): ChatCompletionResponse {
     return response as ChatCompletionResponse;
   }
 
   /**
    * OpenAI streaming chunks are already in correct SSE format
    */
-  transformStreamChunk(chunk: string, model: string): string {
+  transformStreamChunk(chunk: string, _model: string): string {
     // OpenAI SSE chunks are already in the correct format
     // Just ensure proper formatting
     if (chunk.startsWith('data: ')) {

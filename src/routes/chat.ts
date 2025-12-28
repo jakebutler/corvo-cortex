@@ -1,6 +1,5 @@
 import { Hono } from 'hono';
 import type { Env } from '../types';
-import type { ChatCompletionRequest } from '../providers/base';
 import { authMiddleware } from '../middleware/auth';
 import { rateLimitCheckMiddleware, rateLimitIncrementMiddleware } from '../middleware/rate-limit';
 import { telemetryMiddleware, updateTelemetryMetadata, storeResponseData } from '../middleware/telemetry';

@@ -263,6 +263,32 @@ npm run test:integration
 npm run test:coverage
 ```
 
+## Code Quality
+
+### Running Analysis
+
+Run all analysis tools:
+```bash
+npm run analyze
+```
+
+### Individual Checks
+
+- **Linting:** `npm run lint` or `npm run lint:fix`
+- **Type Checking:** `npm run type-check`
+- **Circular Dependencies:** `npm run complexity`
+- **Security Audit:** `npm run audit`
+- **CodeRabbit Review:** `coderabbit --prompt-only`
+
+### Reports
+
+Analysis reports are generated in the `reports/` directory (auto-generated, not in git).
+
+```bash
+# View ESLint HTML report
+open reports/eslint-report.html
+```
+
 ## Monitoring
 
 ### LangFuse Dashboard
