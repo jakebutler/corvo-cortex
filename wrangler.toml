@@ -43,6 +43,7 @@ ENVIRONMENT = "development"
 # Production configuration
 [env.production]
 name = "corvo-cortex-pro"
+custom_domains = ["cortex.corvolabs.com"]
 
 # Production KV Namespaces (preview namespaces are separate from production)
 [[env.production.kv_namespaces]]

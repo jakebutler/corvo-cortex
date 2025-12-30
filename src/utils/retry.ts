@@ -18,7 +18,7 @@ const DEFAULT_RETRY_OPTIONS: Required<RetryOptions> = {
   baseDelay: 100,
   maxDelay: 10000,
   retryableStatuses: [408, 429, 500, 502, 503, 504],
-  onRetry: () => {}
+  onRetry: () => { }
 };
 
 /**
@@ -79,7 +79,7 @@ export async function fetchWithRetry(
       }
 
       // Response failed with retryable status
-      const errorText = await response.text();
+      const errorText = await response.clone().text();
       lastError = new Error(`HTTP ${response.status}: ${errorText}`);
 
       // Don't retry if this was the last attempt

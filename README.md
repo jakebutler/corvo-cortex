@@ -74,7 +74,7 @@ Returns available models and defaults:
 
 ```bash
 curl -H "Authorization: Bearer sk-corvo-kinisi-xxx" \
-  https://corvo-cortex.corvolabs.workers.dev/v1/models
+  https://cortex.corvolabs.com/v1/models
 ```
 
 Response:
@@ -105,7 +105,7 @@ curl -X POST \
     "model": "claude-3-5-sonnet",
     "messages": [{"role": "user", "content": "Hello!"}]
   }' \
-  https://corvo-cortex.corvolabs.workers.dev/v1/chat/completions
+  https://cortex.corvolabs.com/v1/chat/completions
 ```
 
 With streaming:

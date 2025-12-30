@@ -113,11 +113,11 @@ wrangler deploy --env preview
 
 ```bash
 # Test health endpoint
-curl https://corvo-cortex-pro.<your-subdomain>.workers.dev/
+curl https://cortex.corvolabs.com/health
 
 # Test models endpoint (requires valid API key)
 curl -H "Authorization: Bearer sk-corvo-kinisi-xxx" \
-  https://corvo-cortex-pro.<your-subdomain>.workers.dev/v1/models
+  https://cortex.corvolabs.com/v1/models
 ```
 
 ---
@@ -127,7 +127,7 @@ curl -H "Authorization: Bearer sk-corvo-kinisi-xxx" \
 ### 5.1 Add Custom Domain
 
 ```bash
-wrangler domains add corvo-api.corvolabs.workers.dev --env production
+wrangler domains add cortex.corvolabs.com --env production
 ```
 
 ### 5.2 Update DNS

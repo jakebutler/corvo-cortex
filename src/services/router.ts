@@ -69,7 +69,7 @@ export function determineProvider(
     headers: {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${env.OPENROUTER_API_KEY}`,
-      'HTTP-Referer': 'https://corvolabs.workers.dev',
+      'HTTP-Referer': 'https://cortex.corvolabs.com',
       'X-Title': 'Corvo Cortex'
     }
   };

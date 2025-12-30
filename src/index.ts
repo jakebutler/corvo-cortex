@@ -10,8 +10,24 @@ import { CircuitBreaker } from './durable-objects/circuit-breaker';
 
 const app = new Hono<{ Bindings: Env }>();
 
-// CORS middleware
-app.use('*', cors());
+// CORS middleware - Permissive by default for API gateway use case
+// Set ALLOWED_ORIGINS env var to restrict (comma-separated list)
+app.use('*', cors({
+  origin: (origin, c) => {
+    const allowedOrigins = c.env.ALLOWED_ORIGINS;
+    // If no restriction configured, allow all origins (API gateway default)
+    if (!allowedOrigins || allowedOrigins === '*') {
+      return origin || '*';
+    }
+    // Check against allowed list
+    const allowed = allowedOrigins.split(',').map((o: string) => o.trim());
+    return allowed.includes(origin || '') ? origin : null;
+  },
+  allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowHeaders: ['Authorization', 'Content-Type', 'X-Request-ID'],
+  exposeHeaders: ['X-Request-ID'],
+  maxAge: 86400,
+}));
 
 // Health check
 app.get('/', (c) => {

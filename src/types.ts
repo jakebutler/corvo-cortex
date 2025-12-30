@@ -64,6 +64,7 @@ export interface Env {
 
   // Environment variables
   ENVIRONMENT: string;
+  ALLOWED_ORIGINS?: string; // Comma-separated list of allowed origins for CORS
 }
 
 // Provider types

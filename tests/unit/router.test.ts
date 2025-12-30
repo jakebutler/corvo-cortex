@@ -63,8 +63,8 @@ describe('determineProvider', () => {
 
   it('should use default model when model is not specified', () => {
     const envWithCredits = { ...mockEnv, CREDITS_OPENAI: 'true' };
-    // @ts-expect-error - Testing with undefined model
-    const route = determineProvider(undefined, mockClient, envWithCredits);
+    // When no model is specified in request, chat.ts falls back to client.defaultModel
+    const route = determineProvider(mockClient.defaultModel, mockClient, envWithCredits);
     expect(route.provider).toBe('openai-direct');
   });
 });

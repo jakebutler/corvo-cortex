@@ -144,6 +144,7 @@ chatApp.post('/', async (c) => {
         baseDelay: 100,
         maxDelay: 10000,
         onRetry: (attempt, error) => {
+          // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
           console.warn(`Retry attempt ${attempt} for ${route.provider}:`, error.message);
         }
       }

@@ -51,9 +51,9 @@ describe('Provider Adapters - Integration', () => {
       expect(result.choices[0].message.content).toBe('Hi there!');
       expect(result.choices[0].finish_reason).toBe('stop');
       expect(result.usage).toEqual({
-        promptTokens: 10,
-        completionTokens: 5,
-        totalTokens: 15
+        prompt_tokens: 10,
+        completion_tokens: 5,
+        total_tokens: 15
       });
     });
   });
@@ -126,7 +126,7 @@ describe('Provider Adapters - Integration', () => {
       const result = zaiAdapter.transformResponse(glmResponse, 'glm-4');
 
       expect(result.choices[0].message.content).toBe('Hello from GLM!');
-      expect(result.usage.totalTokens).toBe(12);
+      expect(result.usage.total_tokens).toBe(12);
     });
   });
 

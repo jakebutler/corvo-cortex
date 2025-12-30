@@ -1,110 +1,108 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { rateLimitCheckMiddleware } from '../../src/middleware/rate-limit';
+import { authMiddleware } from '../../src/middleware/auth';
 import { Hono } from 'hono';
+import { createMockKV, createMockClientConfig, TEST_API_KEY } from '../mocks/env';
+import type { Env, Variables } from '../../src/types';
 
 describe('rateLimitCheckMiddleware', () => {
-  let app: Hono;
-  let mockEnv: any;
+  let app: Hono<{ Bindings: Env; Variables: Variables }>;
 
-  beforeEach(() => {
-    mockEnv = {
-      CORTEX_CLIENTS: {
-        get: async (_key: string, options?: { type: string }) => {
-          if (options?.type === 'json') {
-            // Return a client config for key validation
-            return {
-              appId: 'test-app',
-              name: 'Test App',
-              defaultModel: 'gpt-4o',
-              allowZai: true,
-              fallbackStrategy: 'openrouter' as const,
-              rateLimit: {
-                requestsPerMinute: 10,
-                tokensPerMinute: 1000
-              }
-            };
-          }
-          // Return current usage (empty)
-          return null;
-        }
-      }
+  function createTestApp(clientConfig = createMockClientConfig(), usageData: { requests: number; tokens: number } | null = null) {
+    const kvData: Record<string, unknown> = {
+      [TEST_API_KEY]: clientConfig
     };
-  });
+
+    // Add rate limit usage data if provided
+    if (usageData) {
+      const minute = Math.floor(Date.now() / 60000);
+      const rateLimitKey = `ratelimit:${TEST_API_KEY}:${minute}`;
+      kvData[rateLimitKey] = usageData;
+    }
+
+    const mockEnv: Env = {
+      CORTEX_CLIENTS: createMockKV(kvData),
+      CORTEX_CONFIG: createMockKV(),
+      ANTHROPIC_API_KEY: 'test',
+      OPENAI_API_KEY: 'test',
+      ZAI_API_KEY: 'test',
+      OPENROUTER_API_KEY: 'test',
+      LANGFUSE_PUBLIC_KEY: 'test',
+      LANGFUSE_SECRET_KEY: 'test',
+      CIRCUIT_BREAKER: {} as unknown as DurableObjectNamespace,
+      ENVIRONMENT: 'test'
+    } as Env;
+
+    const testApp = new Hono<{ Bindings: Env; Variables: Variables }>();
+    testApp.use('*', authMiddleware);
+    testApp.use('*', rateLimitCheckMiddleware);
+    testApp.get('/test', (c) => c.json({ success: true }));
+
+    return { app: testApp, env: mockEnv };
+  }
 
   it('should pass when rate limit not exceeded', async () => {
-    const middleware = rateLimitCheckMiddleware;
-    const nextCalled = { value: false };
+    const { app, env } = createTestApp();
 
-    const context = {
-      get: (key: string) => {
-        if (key === 'client') return mockEnv.CORTEX_CLIENTS.get('test', { type: 'json' });
-        return undefined;
-      },
-      set: () => {},
-      req: {
-        header: (name: string) => name === 'Authorization' ? 'Bearer test-key' : undefined
-      },
-      json: (data: any, status?: number) => ({
-        status: status || 200,
-        json: async () => data
-      })
-    } as any;
-
-    await middleware(context, async () => {
-      nextCalled.value = true;
+    const request = new Request('http://localhost/test', {
+      headers: { 'Authorization': `Bearer ${TEST_API_KEY}` }
     });
+    const response = await app.fetch(request, env);
 
-    expect(nextCalled.value).toBe(true);
+    expect(response.status).toBe(200);
+    const json = await response.json() as { success: boolean };
+    expect(json.success).toBe(true);
   });
 
   it('should return 429 when request limit exceeded', async () => {
-    const middleware = rateLimitCheckMiddleware;
+    // Create client with low rate limit that's already at capacity
+    const clientConfig = createMockClientConfig({
+      rateLimit: { requestsPerMinute: 10, tokensPerMinute: 1000 }
+    });
+    const { app, env } = createTestApp(clientConfig, { requests: 10, tokens: 0 });
 
-    const context = {
-      get: (key: string) => {
-        if (key === 'client') return {
-          rateLimit: { requestsPerMinute: 10, tokensPerMinute: 1000 },
-          admin: false
-        };
-        return { requests: 10, tokens: 0 }; // Already at limit
-      },
-      set: () => {},
-      req: {
-        header: (name: string) => name === 'Authorization' ? 'Bearer test-key' : undefined
-      },
-      json: (data: any, status: number) => ({
-        status,
-        json: async () => data
-      })
-    } as any;
+    const request = new Request('http://localhost/test', {
+      headers: { 'Authorization': `Bearer ${TEST_API_KEY}` }
+    });
+    const response = await app.fetch(request, env);
 
-    const result = await middleware(context, async () => {});
-
-    expect(result.status).toBe(429);
-    const json = await result.json();
+    expect(response.status).toBe(429);
+    const json = await response.json() as { error: string; type: string };
     expect(json.error).toContain('Rate limit exceeded');
     expect(json.type).toBe('requests');
   });
 
   it('should bypass for admin keys', async () => {
-    const middleware = rateLimitCheckMiddleware;
-    const nextCalled = { value: false };
+    // Admin client with admin: true
+    const adminConfig = { ...createMockClientConfig(), admin: true };
+    const kvData: Record<string, unknown> = { [TEST_API_KEY]: adminConfig };
 
-    const context = {
-      get: (key: string) => {
-        if (key === 'client') return { admin: true };
-        return undefined;
-      },
-      set: () => {},
-      req: {
-        header: (name: string) => name === 'Authorization' ? 'Bearer admin-key' : undefined
-      }
-    } as any;
+    const mockEnv: Env = {
+      CORTEX_CLIENTS: createMockKV(kvData),
+      CORTEX_CONFIG: createMockKV(),
+      ANTHROPIC_API_KEY: 'test',
+      OPENAI_API_KEY: 'test',
+      ZAI_API_KEY: 'test',
+      OPENROUTER_API_KEY: 'test',
+      LANGFUSE_PUBLIC_KEY: 'test',
+      LANGFUSE_SECRET_KEY: 'test',
+      CIRCUIT_BREAKER: {} as unknown as DurableObjectNamespace,
+      ENVIRONMENT: 'test'
+    } as Env;
 
-    await middleware(context, async () => {
-      nextCalled.value = true;
+    const testApp = new Hono<{ Bindings: Env; Variables: Variables }>();
+    testApp.use('*', authMiddleware);
+    testApp.use('*', rateLimitCheckMiddleware);
+    testApp.get('/test', (c) => c.json({ success: true }));
+
+    const request = new Request('http://localhost/test', {
+      headers: { 'Authorization': `Bearer ${TEST_API_KEY}` }
     });
+    const response = await testApp.fetch(request, mockEnv);
 
-    expect(nextCalled.value).toBe(true);
+    expect(response.status).toBe(200);
+    const json = await response.json() as { success: boolean };
+    expect(json.success).toBe(true);
   });
 });
+
