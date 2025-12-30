@@ -2,7 +2,13 @@
 
 # Configuration
 NAMESPACE_ID="8607bc102781438a8e1ea9d481a5a12b" # From wrangler.toml [env.production.kv_namespaces] CORTEX_CLIENTS
-API_KEY="sk-corvo-kinisi-prod-9x2m4p8q"
+API_KEY="${KINISI_API_KEY}"
+
+if [ -z "$API_KEY" ]; then
+  echo "❌ Error: KINISI_API_KEY environment variable is not set."
+  echo "Usage: KINISI_API_KEY=your_key ./scripts/provision-kinisi.sh"
+  exit 1
+fi
 APP_NAME="Kinisi"
 
 echo "🚀 Provisioning '$APP_NAME' in Production..."
