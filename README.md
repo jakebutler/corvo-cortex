@@ -25,7 +25,29 @@ Corvo Cortex is a serverless AI Gateway built on Cloudflare Workers that decoupl
 | Anthropic | Claude 3.5 Sonnet, Haiku, Opus | Direct API |
 | OpenAI | GPT-4o, GPT-4o-mini | Direct API |
 | Z.ai | GLM-4 Plus | Direct API |
+| MiniMax | MiniMax-M2 | Direct API |
 | OpenRouter | 100+ models | Fallback/paid |
+
+## Documentation
+
+Comprehensive documentation is available in the [`/docs`](./docs) directory:
+
+| Document | Description |
+|----------|-------------|
+| [spec.md](./docs/spec.md) | Full API specification, data models, request flow |
+| [changelog.md](./docs/changelog.md) | Release history and change log |
+| [project-status.md](./docs/project-status.md) | Current status, known issues |
+
+### Feature Reference
+
+| Feature | Documentation |
+|---------|---------------|
+| Smart Routing | [provider-routing.md](./docs/features/provider-routing.md) |
+| Authentication | [authentication.md](./docs/features/authentication.md) |
+| Rate Limiting | [rate-limiting.md](./docs/features/rate-limiting.md) |
+| Circuit Breaker | [circuit-breaker.md](./docs/features/circuit-breaker.md) |
+| Streaming | [streaming.md](./docs/features/streaming.md) |
+| Telemetry | [telemetry.md](./docs/features/telemetry.md) |
 
 ## Quick Start
 
@@ -321,7 +343,20 @@ Access Cloudflare Dashboard for:
 2. Create a feature branch
 3. Make your changes
 4. Run tests: `npm test`
-5. Submit a pull request
+5. Update documentation (run `/update-docs` workflow)
+6. Submit a pull request
+
+### Documentation Updates
+
+We maintain documentation with every commit. Before committing:
+
+```bash
+# Install pre-commit hook
+cp scripts/pre-commit-docs.sh .git/hooks/pre-commit
+chmod +x .git/hooks/pre-commit
+```
+
+Or manually run the `/update-docs` workflow.
 
 ## License
 
