@@ -57,6 +57,19 @@ export function determineProvider(
     };
   }
 
+  // 4. MiniMax Direct - if credits available
+  if ((model.startsWith('MiniMax') || model.startsWith('minimax')) && env.CREDITS_MINIMAX === 'true') {
+    return {
+      provider: 'minimax',
+      url: 'https://api.minimax.io/anthropic/v1/messages',
+      headers: {
+        'content-type': 'application/json',
+        'x-api-key': env.MINIMAX_API_KEY,
+        'anthropic-version': '2023-06-01'
+      }
+    };
+  }
+
   // 4. Fallback strategy
   if (client.fallbackStrategy === 'fail-fast') {
     throw new Error('Payment Required: Direct credits exhausted. Fail-fast policy enabled.');

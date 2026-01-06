@@ -21,6 +21,7 @@ modelsApp.get('/', async (c) => {
     { id: 'glm-4-plus', provider: 'z-ai', name: 'GLM-4 (Creative)' },
     { id: 'gpt-4o-mini', provider: 'openai', name: 'GPT-4o Mini (Fast)' },
     { id: 'claude-3-haiku', provider: 'anthropic', name: 'Claude 3 Haiku (Economical)' },
+    { id: 'MiniMax-M2', provider: 'minimax', name: 'MiniMax M2 (Creative)' },
   ];
 
   return c.json({

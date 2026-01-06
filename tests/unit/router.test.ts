@@ -22,11 +22,20 @@ describe('determineProvider', () => {
     OPENAI_API_KEY: 'test',
     ZAI_API_KEY: 'test',
     OPENROUTER_API_KEY: 'test',
+    MINIMAX_API_KEY: 'test',
     LANGFUSE_PUBLIC_KEY: 'test',
     LANGFUSE_SECRET_KEY: 'test',
     CIRCUIT_BREAKER: {} as any,
     ENVIRONMENT: 'test'
   };
+
+  it('should route to MiniMax for minimax models with credits', () => {
+    const envWithCredits = { ...mockEnv, CREDITS_MINIMAX: 'true' };
+    const route = determineProvider('MiniMax-M2', mockClient, envWithCredits);
+    expect(route.provider).toBe('minimax');
+    expect(route.url).toContain('api.minimax.io');
+    expect(route.headers['anthropic-version']).toBe('2023-06-01');
+  });
 
   it('should route to Z.ai for glm models', () => {
     const route = determineProvider('glm-4-plus', mockClient, mockEnv);

@@ -31,6 +31,7 @@ ENVIRONMENT = "development"
 # Credit flags (set via wrangler variable put)
 # CREDITS_ANTHROPIC = "true"
 # CREDITS_OPENAI = "true"
+# CREDITS_MINIMAX = "true"
 
 # Production secrets (set via: wrangler secret put <NAME> --env production)
 # ANTHROPIC_API_KEY
@@ -70,3 +71,4 @@ new_sqlite_classes = ["CircuitBreaker"]
 ENVIRONMENT = "production"
 CREDITS_ANTHROPIC = "true"
 CREDITS_OPENAI = "true"
+CREDITS_MINIMAX = "true"

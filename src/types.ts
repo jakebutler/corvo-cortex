@@ -49,6 +49,7 @@ export interface Env {
   OPENAI_API_KEY: string;
   ZAI_API_KEY: string;
   OPENROUTER_API_KEY: string;
+  MINIMAX_API_KEY: string;
 
   // LangFuse (secrets)
   LANGFUSE_PUBLIC_KEY: string;
@@ -58,6 +59,7 @@ export interface Env {
   // Credit flags (set via wrangler variable)
   CREDITS_ANTHROPIC?: string;
   CREDITS_OPENAI?: string;
+  CREDITS_MINIMAX?: string;
 
   // Durable Objects
   CIRCUIT_BREAKER: DurableObjectNamespace;
@@ -68,7 +70,7 @@ export interface Env {
 }
 
 // Provider types
-export type LLMProvider = 'anthropic-direct' | 'openai-direct' | 'z-ai-pro' | 'openrouter';
+export type LLMProvider = 'anthropic-direct' | 'openai-direct' | 'z-ai-pro' | 'openrouter' | 'minimax';
 
 // Circuit breaker state
 export type CircuitState = 'closed' | 'open' | 'half-open';

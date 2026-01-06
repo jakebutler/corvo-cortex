@@ -17,6 +17,8 @@ export function getAdapterForProvider(provider: LLMProvider) {
       return zaiAdapter;
     case 'openrouter':
       return openrouterAdapter;
+    case 'minimax':
+      return anthropicAdapter;
     default:
       return openaiAdapter; // Default to OpenAI format
   }
