@@ -19,14 +19,25 @@ preview_id = "test_config_namespace_preview"
 name = "CIRCUIT_BREAKER"
 class_name = "CircuitBreaker"
 
+[[durable_objects.bindings]]
+name = "CREDIT_LEDGER"
+class_name = "CreditLedger"
+
 # Migrations
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["CircuitBreaker"]
 
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["CreditLedger"]
+
 # Environment variables
 [vars]
 ENVIRONMENT = "development"
+
+[triggers]
+crons = ["0 0 * * 0"]
 
 # Credit flags (set via wrangler variable put)
 # CREDITS_ANTHROPIC = "true"
@@ -62,9 +73,17 @@ preview_id = "ae27bfa48e1a478cb2344c543cea106a"
 name = "CIRCUIT_BREAKER"
 class_name = "CircuitBreaker"
 
+[[env.production.durable_objects.bindings]]
+name = "CREDIT_LEDGER"
+class_name = "CreditLedger"
+
 [[env.production.migrations]]
 tag = "v1"
 new_sqlite_classes = ["CircuitBreaker"]
+
+[[env.production.migrations]]
+tag = "v2"
+new_sqlite_classes = ["CreditLedger"]
 
 # Production Environment Variables and Credit Flags
 [env.production.vars]

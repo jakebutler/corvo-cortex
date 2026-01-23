@@ -1,4 +1,4 @@
-import type { ProviderAdapter, ChatCompletionRequest, ChatCompletionResponse } from './base';
+import type { ProviderAdapter, ChatCompletionRequest, ChatCompletionResponse, ChatMessage } from './base';
 
 /**
  * Z.ai (Zhipu AI / GLM) API adapter
@@ -14,7 +14,7 @@ export class ZaiAdapter implements ProviderAdapter {
       model: request.model,
       messages: request.messages.map(m => ({
         role: m.role,
-        content: m.content
+        content: messageContentToText(m.content)
       })),
       temperature: request.temperature ?? 0.7,
       top_p: request.top_p,
@@ -92,6 +92,17 @@ export class ZaiAdapter implements ProviderAdapter {
       return chunk;
     }
   }
+}
+
+function messageContentToText(content: ChatMessage['content']): string {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content
+      .filter(part => part?.type === 'text' && typeof part.text === 'string')
+      .map(part => part.text)
+      .join(' ');
+  }
+  return '';
 }
 
 export const zaiAdapter = new ZaiAdapter();

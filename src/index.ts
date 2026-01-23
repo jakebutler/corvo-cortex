@@ -6,7 +6,10 @@ import chatRoutes from './routes/chat';
 import healthRoutes from './routes/health';
 import adminRoutes from './routes/admin';
 import analyticsRoutes from './routes/analytics';
+import responsesRoutes from './routes/responses';
 import { CircuitBreaker } from './durable-objects/circuit-breaker';
+import { CreditLedger } from './durable-objects/credit-ledger';
+import { refreshFireworksModelCatalog } from './services/fireworks-models';
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -37,11 +40,22 @@ app.get('/', (c) => {
 // Mount routes
 app.route('/v1/models', modelsRoutes);
 app.route('/v1/chat/completions', chatRoutes);
+app.route('/v1/responses', responsesRoutes);
 app.route('/health', healthRoutes);
 app.route('/admin', adminRoutes);
 app.route('/analytics', analyticsRoutes);
 
-export default app;
+export default {
+  fetch: app.fetch,
+  async scheduled(_event: ScheduledEvent, env: Env, _ctx: ExecutionContext) {
+    try {
+      await refreshFireworksModelCatalog(env);
+    } catch (error) {
+      console.error('Fireworks model catalog refresh failed:', error);
+    }
+  }
+};
 
 // Export Durable Objects
 export { CircuitBreaker };
+export { CreditLedger };

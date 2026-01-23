@@ -25,15 +25,26 @@ function estimateTokens(text: string): number {
 /**
  * Estimate tokens from a chat completion request
  */
+type MessageContent = string | Array<{ type?: string; text?: string }> | null;
+
 function estimateRequestTokens(body: {
-  messages?: Array<{ content: string }>;
+  messages?: Array<{ content: MessageContent }>;
 }): number {
   if (!body.messages || !Array.isArray(body.messages)) {
     return 0;
   }
 
   const totalText = body.messages
-    .map(m => m.content || '')
+    .map(m => {
+      if (typeof m.content === 'string') return m.content;
+      if (Array.isArray(m.content)) {
+        return m.content
+          .filter(part => part?.type === 'text' && typeof part.text === 'string')
+          .map(part => part.text)
+          .join(' ');
+      }
+      return '';
+    })
     .join(' ');
 
   return estimateTokens(totalText);

@@ -22,9 +22,12 @@ describe('Admin Route - /admin', () => {
             OPENAI_API_KEY: 'test',
             ZAI_API_KEY: 'test',
             OPENROUTER_API_KEY: 'test',
+            MINIMAX_API_KEY: 'test',
+            FIREWORKS_API_KEY: 'test',
             LANGFUSE_PUBLIC_KEY: 'test',
             LANGFUSE_SECRET_KEY: 'test',
             CIRCUIT_BREAKER: {} as unknown as DurableObjectNamespace,
+            CREDIT_LEDGER: {} as unknown as DurableObjectNamespace,
             ENVIRONMENT: 'test',
             ...overrides
         } as Env;

@@ -19,6 +19,8 @@ export function getAdapterForProvider(provider: LLMProvider) {
       return openrouterAdapter;
     case 'minimax':
       return anthropicAdapter;
+    case 'fireworks':
+      return openaiAdapter;
     default:
       return openaiAdapter; // Default to OpenAI format
   }

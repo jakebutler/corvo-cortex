@@ -1,4 +1,4 @@
-import type { ProviderAdapter, ChatCompletionRequest, ChatCompletionResponse } from './base';
+import type { ProviderAdapter, ChatCompletionRequest, ChatCompletionResponse, ChatMessage } from './base';
 
 /**
  * Anthropic Messages API adapter
@@ -11,14 +11,14 @@ export class AnthropicAdapter implements ProviderAdapter {
   transformRequest(request: ChatCompletionRequest): Record<string, unknown> {
     // Extract system message if present
     const systemMessage = request.messages.find(m => m.role === 'system');
-    const system = systemMessage?.content || '';
+    const system = messageContentToText(systemMessage?.content ?? '');
 
     // Filter out system message from messages array
     const messages = request.messages
       .filter(m => m.role !== 'system')
       .map(m => ({
         role: m.role,
-        content: m.content
+        content: messageContentToText(m.content)
       }));
 
     return {
@@ -129,6 +129,17 @@ export class AnthropicAdapter implements ProviderAdapter {
         return 'stop';
     }
   }
+}
+
+function messageContentToText(content: ChatMessage['content']): string {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content
+      .filter(part => part?.type === 'text' && typeof part.text === 'string')
+      .map(part => part.text)
+      .join(' ');
+  }
+  return '';
 }
 
 export const anthropicAdapter = new AnthropicAdapter();

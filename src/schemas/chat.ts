@@ -3,15 +3,28 @@ import { z } from 'zod';
 /**
  * Chat message role schema
  */
-export const chatMessageRoleSchema = z.enum(['system', 'user', 'assistant']);
+export const chatMessageRoleSchema = z.enum(['system', 'user', 'assistant', 'tool']);
+
+const chatMessageContentPartSchema = z.object({
+  type: z.enum(['text', 'image_url']),
+  text: z.string().optional(),
+  image_url: z.object({
+    url: z.string().min(1),
+    detail: z.string().optional()
+  }).optional()
+});
 
 /**
  * Chat message schema
  */
 export const chatMessageSchema = z.object({
   role: chatMessageRoleSchema,
-  content: z.string().min(1, 'Message content cannot be empty')
-});
+  content: z.union([
+    z.string().min(1, 'Message content cannot be empty'),
+    z.array(chatMessageContentPartSchema).min(1),
+    z.null()
+  ])
+}).passthrough();
 
 /**
  * Chat completion request schema
@@ -23,7 +36,7 @@ export const chatCompletionRequestSchema = z.object({
   max_tokens: z.number().int().positive().optional(),
   top_p: z.number().min(0).max(1).optional(),
   stream: z.boolean().optional().default(false)
-});
+}).passthrough();
 
 /**
  * Extract type from schema

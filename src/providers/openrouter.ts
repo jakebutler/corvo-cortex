@@ -9,14 +9,7 @@ export class OpenRouterAdapter implements ProviderAdapter {
    * OpenRouter uses OpenAI-compatible format
    */
   transformRequest(request: ChatCompletionRequest): Record<string, unknown> {
-    return {
-      model: request.model,
-      messages: request.messages,
-      temperature: request.temperature,
-      max_tokens: request.max_tokens,
-      stream: request.stream || false,
-      top_p: request.top_p
-    };
+    return { ...request } as Record<string, unknown>;
   }
 
   /**

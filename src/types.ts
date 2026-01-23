@@ -50,6 +50,7 @@ export interface Env {
   ZAI_API_KEY: string;
   OPENROUTER_API_KEY: string;
   MINIMAX_API_KEY: string;
+  FIREWORKS_API_KEY: string;
 
   // LangFuse (secrets)
   LANGFUSE_PUBLIC_KEY: string;
@@ -63,6 +64,7 @@ export interface Env {
 
   // Durable Objects
   CIRCUIT_BREAKER: DurableObjectNamespace;
+  CREDIT_LEDGER: DurableObjectNamespace;
 
   // Environment variables
   ENVIRONMENT: string;
@@ -70,7 +72,7 @@ export interface Env {
 }
 
 // Provider types
-export type LLMProvider = 'anthropic-direct' | 'openai-direct' | 'z-ai-pro' | 'openrouter' | 'minimax';
+export type LLMProvider = 'anthropic-direct' | 'openai-direct' | 'z-ai-pro' | 'openrouter' | 'minimax' | 'fireworks';
 
 // Circuit breaker state
 export type CircuitState = 'closed' | 'open' | 'half-open';

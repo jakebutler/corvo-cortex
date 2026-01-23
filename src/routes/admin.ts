@@ -1,11 +1,15 @@
 import { Hono } from 'hono';
-import type { Env, RateLimitUsage } from '../types';
+import type { Env, RateLimitUsage, LLMProvider } from '../types';
 import { adminAuthMiddleware } from '../middleware/auth';
+import { getCreditBalance, setCreditBalance, adjustCreditBalance } from '../services/credits';
+import { getProviderPricing, ProviderPricing } from '../services/pricing';
 
 const adminApp = new Hono<{ Bindings: Env }>();
 
 // Apply admin auth to all routes
 adminApp.use('*', adminAuthMiddleware);
+
+const PROVIDERS: LLMProvider[] = ['anthropic-direct', 'openai-direct', 'z-ai-pro', 'openrouter', 'minimax', 'fireworks'];
 
 /**
  * GET /admin/usage
@@ -67,6 +71,96 @@ adminApp.get('/clients', async (c) => {
     message: 'Client listing requires a separate index or database',
     note: 'Use ?key=<apiKey> query parameter to check specific client usage'
   });
+});
+
+/**
+ * GET /admin/credits
+ * List credit balances for all providers or a specific provider
+ */
+adminApp.get('/credits', async (c) => {
+  const provider = c.req.query('provider') as LLMProvider | undefined;
+
+  if (provider) {
+    if (!PROVIDERS.includes(provider)) {
+      return c.json({ error: 'Unknown provider' }, 400);
+    }
+    const balance = await getCreditBalance(c.env, provider);
+    return c.json({ provider, ...balance });
+  }
+
+  const balances = await Promise.all(
+    PROVIDERS.map(async (p) => ({ provider: p, ...(await getCreditBalance(c.env, p)) }))
+  );
+
+  return c.json({ providers: balances });
+});
+
+/**
+ * POST /admin/credits/set
+ * Set the credit balance for a provider
+ */
+adminApp.post('/credits/set', async (c) => {
+  const body = await c.req.json() as { provider?: LLMProvider; balance?: number; currency?: 'USD' | 'credits' };
+  if (!body.provider || typeof body.balance !== 'number' || !body.currency) {
+    return c.json({ error: 'Invalid payload' }, 400);
+  }
+  if (!PROVIDERS.includes(body.provider)) {
+    return c.json({ error: 'Unknown provider' }, 400);
+  }
+
+  const balance = await setCreditBalance(c.env, body.provider, body.balance, body.currency);
+  return c.json({ provider: body.provider, ...balance });
+});
+
+/**
+ * POST /admin/credits/adjust
+ * Adjust the credit balance for a provider
+ */
+adminApp.post('/credits/adjust', async (c) => {
+  const body = await c.req.json() as { provider?: LLMProvider; delta?: number; currency?: 'USD' | 'credits' };
+  if (!body.provider || typeof body.delta !== 'number') {
+    return c.json({ error: 'Invalid payload' }, 400);
+  }
+  if (!PROVIDERS.includes(body.provider)) {
+    return c.json({ error: 'Unknown provider' }, 400);
+  }
+
+  const balance = await adjustCreditBalance(c.env, body.provider, body.delta, body.currency);
+  return c.json({ provider: body.provider, ...balance });
+});
+
+/**
+ * GET /admin/pricing
+ * Get pricing for a provider
+ */
+adminApp.get('/pricing', async (c) => {
+  const provider = c.req.query('provider') as LLMProvider | undefined;
+  if (!provider) {
+    return c.json({ error: 'Provider is required' }, 400);
+  }
+  if (!PROVIDERS.includes(provider)) {
+    return c.json({ error: 'Unknown provider' }, 400);
+  }
+
+  const pricing = await getProviderPricing(c.env, provider);
+  return c.json({ provider, pricing: pricing || {} });
+});
+
+/**
+ * POST /admin/pricing
+ * Replace pricing for a provider
+ */
+adminApp.post('/pricing', async (c) => {
+  const body = await c.req.json() as { provider?: LLMProvider; pricing?: ProviderPricing };
+  if (!body.provider || !body.pricing || typeof body.pricing !== 'object') {
+    return c.json({ error: 'Invalid payload' }, 400);
+  }
+  if (!PROVIDERS.includes(body.provider)) {
+    return c.json({ error: 'Unknown provider' }, 400);
+  }
+
+  await c.env.CORTEX_CONFIG.put(`pricing:${body.provider}`, JSON.stringify(body.pricing));
+  return c.json({ provider: body.provider, pricing: body.pricing });
 });
 
 export default adminApp;

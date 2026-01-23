@@ -2,12 +2,22 @@
  * Base provider interface and types
  */
 
-export interface ChatMessage {
-  role: 'system' | 'user' | 'assistant';
-  content: string;
+export interface ChatMessageContentPart {
+  type: 'text' | 'image_url';
+  text?: string;
+  image_url?: {
+    url: string;
+    detail?: string;
+  };
 }
 
-export interface ChatCompletionRequest {
+export interface ChatMessage {
+  role: 'system' | 'user' | 'assistant' | 'tool';
+  content: string | ChatMessageContentPart[] | null;
+  [key: string]: unknown;
+}
+
+export interface ChatCompletionRequest extends Record<string, unknown> {
   model: string;
   messages: ChatMessage[];
   temperature?: number;

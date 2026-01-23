@@ -4,8 +4,10 @@ import { authMiddleware } from '../middleware/auth';
 import { rateLimitCheckMiddleware, rateLimitIncrementMiddleware } from '../middleware/rate-limit';
 import { telemetryMiddleware, updateTelemetryMetadata, storeResponseData } from '../middleware/telemetry';
 import { determineProvider } from '../services/router';
+import { estimateCostFromUsage } from '../services/pricing';
+import { getCreditBalance, deductCredits } from '../services/credits';
 import { getAdapterForProvider } from '../utils/transform';
-import { createStreamingResponse } from '../utils/streaming';
+import { createStreamingResponseWithUsage } from '../utils/streaming';
 import { fetchWithRetry } from '../utils/retry';
 import { chatCompletionRequestSchema } from '../schemas/chat';
 import { chatCompletionResponseSchema } from '../schemas/response';
@@ -101,7 +103,7 @@ chatApp.post('/', async (c) => {
   const model = body.model || client.defaultModel || 'gpt-4o';
   let route;
   try {
-    route = determineProvider(model, client, c.env);
+    route = await determineProvider(model, client, c.env);
   } catch (error) {
     if (error instanceof Error && error.message.includes('Payment Required')) {
       return c.json({
@@ -125,7 +127,32 @@ chatApp.post('/', async (c) => {
     }, 503);
   }
 
+  // Skip provider if configured credits are depleted
+  const preBalance = await getCreditBalance(c.env, route.provider);
+  if (preBalance.configured && preBalance.balance <= 0 && route.provider !== 'openrouter') {
+    if (client.fallbackStrategy === 'fail-fast') {
+      return c.json({
+        error: 'Payment Required',
+        message: 'Provider credits exhausted. Fail-fast policy enabled.',
+        provider: route.provider
+      }, 402);
+    }
+
+    route = {
+      provider: 'openrouter',
+      url: 'https://openrouter.ai/api/v1/chat/completions',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${c.env.OPENROUTER_API_KEY}`,
+        'HTTP-Referer': 'https://cortex.corvolabs.com',
+        'X-Title': 'Corvo Cortex'
+      },
+      fallback: { reason: 'insufficient_credits', from: route.provider }
+    };
+  }
+
   const adapter = getAdapterForProvider(route.provider);
+  const finalBalance = await getCreditBalance(c.env, route.provider);
 
   // Transform request to provider format
   const providerRequest = adapter.transformRequest({ ...body, model });
@@ -165,9 +192,34 @@ chatApp.post('/', async (c) => {
     // Record success in circuit breaker
     await recordCircuitBreakerSuccess(c.env, route.provider);
 
+    // Set response headers indicating provider/fallback
+    c.header('X-Corvo-Provider', route.provider);
+    c.header('X-Corvo-Fallback', route.fallback ? 'true' : 'false');
+    if (route.fallback) {
+      c.header('X-Corvo-Fallback-Reason', route.fallback.reason);
+    }
+
     // Handle streaming response
     if (body.stream) {
-      return createStreamingResponse(response);
+      const streamingResponse = await createStreamingResponseWithUsage(response, {
+        onUsage: async (usage) => {
+          if (!finalBalance.configured) return;
+          const cost = await estimateCostFromUsage({
+            env: c.env,
+            provider: route.provider,
+            model,
+            promptTokens: usage.prompt_tokens || 0,
+            completionTokens: usage.completion_tokens || 0
+          });
+          await deductCredits(c.env, route.provider, cost);
+        }
+      });
+      streamingResponse.headers.set('X-Corvo-Provider', route.provider);
+      streamingResponse.headers.set('X-Corvo-Fallback', route.fallback ? 'true' : 'false');
+      if (route.fallback) {
+        streamingResponse.headers.set('X-Corvo-Fallback-Reason', route.fallback.reason);
+      }
+      return streamingResponse;
     }
 
     // Handle non-streaming response
@@ -183,7 +235,19 @@ chatApp.post('/', async (c) => {
     const openaiResponse = adapter.transformResponse(responseData, model);
 
     // Store response data for telemetry
-    storeResponseData(c, responseData);
+    storeResponseData(c, openaiResponse);
+
+    // Deduct credits for successful responses if ledger configured
+    if (finalBalance.configured && openaiResponse.usage) {
+      const cost = await estimateCostFromUsage({
+        env: c.env,
+        provider: route.provider,
+        model,
+        promptTokens: openaiResponse.usage.prompt_tokens || 0,
+        completionTokens: openaiResponse.usage.completion_tokens || 0
+      });
+      await deductCredits(c.env, route.provider, cost);
+    }
 
     return c.json(openaiResponse);
 

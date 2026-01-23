@@ -1,6 +1,7 @@
 import { MiddlewareHandler } from 'hono';
-import type { Env, Variables } from '../types';
+import type { Env, Variables, LLMProvider } from '../types';
 import { createTelemetryService } from '../services/telemetry';
+import { estimateCostFromUsage } from '../services/pricing';
 
 declare module 'hono' {
   type ContextVariableMap = Variables;
@@ -74,6 +75,14 @@ export const telemetryMiddleware: MiddlewareHandler<{ Bindings: Env; Variables: 
       });
 
       // Log structured event
+      const cost = usage ? await estimateCostFromUsage({
+        env: c.env,
+        provider: telemetry.provider as LLMProvider,
+        model: telemetry.model,
+        promptTokens: usage.prompt_tokens || 0,
+        completionTokens: usage.completion_tokens || 0
+      }) : 0;
+
       telemetryService.logEvent({
         event: 'llm_request',
         appId: client.appId,
@@ -82,12 +91,7 @@ export const telemetryMiddleware: MiddlewareHandler<{ Bindings: Env; Variables: 
         metadata: {
           duration: Date.now() - telemetry.startTime,
           status: c.res.status,
-          cost: usage ? telemetryService.estimateCost({
-            provider: telemetry.provider,
-            model: telemetry.model,
-            promptTokens: usage.prompt_tokens || 0,
-            completionTokens: usage.completion_tokens || 0
-          }) : 0
+          cost
         }
       });
     } catch (error) {
