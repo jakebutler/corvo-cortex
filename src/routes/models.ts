@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import type { Env } from '../types';
 import { authMiddleware } from '../middleware/auth';
+import { getMergedModelCatalog } from '../services/models-catalog';
 
 const modelsApp = new Hono<{ Bindings: Env }>();
 
@@ -14,19 +15,18 @@ modelsApp.use('*', authMiddleware);
 modelsApp.get('/', async (c) => {
   const client = c.get('client');
 
-  // Static list of curated models (from PRD)
-  const curatedModels = [
-    { id: 'gpt-4o', provider: 'openai', name: 'GPT-4o (Reasoning)' },
-    { id: 'claude-3-5-sonnet', provider: 'anthropic', name: 'Claude 3.5 Sonnet (Coding)' },
-    { id: 'glm-4-plus', provider: 'z-ai', name: 'GLM-4 (Creative)' },
-    { id: 'gpt-4o-mini', provider: 'openai', name: 'GPT-4o Mini (Fast)' },
-    { id: 'claude-3-haiku', provider: 'anthropic', name: 'Claude 3 Haiku (Economical)' },
-    { id: 'MiniMax-M2', provider: 'minimax', name: 'MiniMax M2 (Creative)' },
+  const catalog = await getMergedModelCatalog(c.env);
+  const models = catalog?.models?.map(model => ({
+    id: model.id,
+    provider: model.provider,
+    name: model.name || model.id
+  })) || [
+    { id: 'gpt-4o', provider: 'openai', name: 'GPT-4o' }
   ];
 
   return c.json({
     object: 'list',
-    data: curatedModels,
+    data: models,
     defaults: {
       system_default: 'gpt-4o',
       client_default: client.defaultModel || 'gpt-4o'

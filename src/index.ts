@@ -9,7 +9,7 @@ import analyticsRoutes from './routes/analytics';
 import responsesRoutes from './routes/responses';
 import { CircuitBreaker } from './durable-objects/circuit-breaker';
 import { CreditLedger } from './durable-objects/credit-ledger';
-import { refreshFireworksModelCatalog } from './services/fireworks-models';
+import { refreshAllModelCatalogs } from './services/models-catalog';
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -49,7 +49,7 @@ export default {
   fetch: app.fetch,
   async scheduled(_event: ScheduledEvent, env: Env, _ctx: ExecutionContext) {
     try {
-      await refreshFireworksModelCatalog(env);
+      await refreshAllModelCatalogs(env);
     } catch (error) {
       console.error('Fireworks model catalog refresh failed:', error);
     }

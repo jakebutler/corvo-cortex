@@ -37,7 +37,7 @@ new_sqlite_classes = ["CreditLedger"]
 ENVIRONMENT = "development"
 
 [triggers]
-crons = ["0 0 * * 0"]
+crons = ["0 0 * * *"]
 
 # Credit flags (set via wrangler variable put)
 # CREDITS_ANTHROPIC = "true"

@@ -12,14 +12,25 @@ describe('Models Route - /v1/models', () => {
             CORTEX_CLIENTS: createMockKV({
                 [TEST_API_KEY]: createMockClientConfig({ defaultModel: 'claude-3-5-sonnet' })
             }),
-            CORTEX_CONFIG: createMockKV(),
+            CORTEX_CONFIG: createMockKV({
+                'models:all': {
+                    updatedAt: new Date().toISOString(),
+                    models: [
+                        { id: 'gpt-4o', provider: 'openai', name: 'GPT-4o' },
+                        { id: 'claude-3-5-sonnet', provider: 'anthropic', name: 'Claude 3.5 Sonnet' }
+                    ]
+                }
+            }),
             ANTHROPIC_API_KEY: 'test',
             OPENAI_API_KEY: 'test',
             ZAI_API_KEY: 'test',
             OPENROUTER_API_KEY: 'test',
+            MINIMAX_API_KEY: 'test',
+            FIREWORKS_API_KEY: 'test',
             LANGFUSE_PUBLIC_KEY: 'test',
             LANGFUSE_SECRET_KEY: 'test',
             CIRCUIT_BREAKER: {} as unknown as DurableObjectNamespace,
+            CREDIT_LEDGER: {} as unknown as DurableObjectNamespace,
             ENVIRONMENT: 'test',
             ...overrides
         } as Env;
@@ -53,7 +64,7 @@ describe('Models Route - /v1/models', () => {
     });
 
     describe('GET /', () => {
-        it('should return curated models list', async () => {
+        it('should return dynamic models list', async () => {
             const request = new Request('http://localhost/', {
                 method: 'GET',
                 headers: { 'Authorization': `Bearer ${TEST_API_KEY}` }
