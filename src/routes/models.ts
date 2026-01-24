@@ -15,12 +15,29 @@ modelsApp.use('*', authMiddleware);
 modelsApp.get('/', async (c) => {
   const client = c.get('client');
 
+  const providerParam = c.req.query('provider');
+  const modalityParam = c.req.query('modality');
+
+  const providers = providerParam ? providerParam.split(',').map(p => p.trim()).filter(Boolean) : [];
+  const modality = modalityParam?.trim();
+
   const catalog = await getMergedModelCatalog(c.env);
-  const models = catalog?.models?.map(model => ({
+  const catalogModels = catalog?.models || [];
+
+  const filtered = catalogModels.filter(model => {
+    const providerMatch = providers.length ? providers.includes(model.provider) : true;
+    const modalityMatch = modality
+      ? (model.modalities?.input?.includes(modality) || model.modalities?.output?.includes(modality))
+      : true;
+    return providerMatch && modalityMatch;
+  });
+
+  const sourceModels = filtered.length ? filtered : catalogModels;
+  const models = sourceModels.length ? sourceModels.map(model => ({
     id: model.id,
     provider: model.provider,
     name: model.name || model.id
-  })) || [
+  })) : [
     { id: 'gpt-4o', provider: 'openai', name: 'GPT-4o' }
   ];
 

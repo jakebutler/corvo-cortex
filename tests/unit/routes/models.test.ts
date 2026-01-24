@@ -16,8 +16,9 @@ describe('Models Route - /v1/models', () => {
                 'models:all': {
                     updatedAt: new Date().toISOString(),
                     models: [
-                        { id: 'gpt-4o', provider: 'openai', name: 'GPT-4o' },
-                        { id: 'claude-3-5-sonnet', provider: 'anthropic', name: 'Claude 3.5 Sonnet' }
+                        { id: 'gpt-4o', provider: 'openai', name: 'GPT-4o', modalities: { input: ['text'], output: ['text'] } },
+                        { id: 'claude-3-5-sonnet', provider: 'anthropic', name: 'Claude 3.5 Sonnet', modalities: { input: ['text'], output: ['text'] } },
+                        { id: 'gpt-image-1', provider: 'openai', name: 'GPT Image', modalities: { input: ['text', 'image'], output: ['image'] } }
                     ]
                 }
             }),
@@ -95,6 +96,33 @@ describe('Models Route - /v1/models', () => {
             expect(response.status).toBe(200);
             const json = await response.json() as { defaults: { client_default: string } };
             expect(json.defaults.client_default).toBe('claude-3-5-sonnet');
+        });
+
+        it('should filter by provider', async () => {
+            const request = new Request('http://localhost/?provider=anthropic', {
+                method: 'GET',
+                headers: { 'Authorization': `Bearer ${TEST_API_KEY}` }
+            });
+
+            const response = await modelsApp.fetch(request, mockEnv);
+
+            expect(response.status).toBe(200);
+            const json = await response.json() as { data: Array<{ provider: string }> };
+            expect(json.data.length).toBeGreaterThan(0);
+            expect(json.data.every(m => m.provider === 'anthropic')).toBe(true);
+        });
+
+        it('should filter by modality', async () => {
+            const request = new Request('http://localhost/?modality=image', {
+                method: 'GET',
+                headers: { 'Authorization': `Bearer ${TEST_API_KEY}` }
+            });
+
+            const response = await modelsApp.fetch(request, mockEnv);
+
+            expect(response.status).toBe(200);
+            const json = await response.json() as { data: Array<{ id: string }> };
+            expect(json.data.some(m => m.id === 'gpt-image-1')).toBe(true);
         });
     });
 });
