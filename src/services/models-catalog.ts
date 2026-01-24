@@ -32,7 +32,7 @@ const MODEL_KEYS: Record<ModelProvider, string> = {
   'z-ai': 'models:z-ai',
   'minimax': 'models:minimax',
   'openrouter': 'models:openrouter',
-  'fireworks': 'models:fireworks'
+  'fireworks': 'models:fireworks:catalog'
 };
 
 const ALL_MODELS_KEY = 'models:all';
@@ -348,10 +348,33 @@ async function fetchMiniMaxModels(): Promise<ModelRecord[]> {
 async function fetchFireworksModels(env: Env): Promise<ModelRecord[]> {
   const catalog = await getFireworksModelCatalog(env);
   if (!catalog) return [];
-  return catalog.models.map(id => ({
+  const ids = normalizeFireworksIds(catalog.models);
+  return ids.map(id => ({
     id,
     provider: 'fireworks',
     name: id,
     modalities: { input: ['text'], output: ['text'] }
   }));
+}
+
+function normalizeFireworksIds(models: unknown[]): string[] {
+  const ids: string[] = [];
+  for (const model of models) {
+    if (typeof model === 'string') {
+      ids.push(model);
+      continue;
+    }
+    if (model && typeof model === 'object') {
+      const candidate = (model as { id?: unknown }).id;
+      if (typeof candidate === 'string') {
+        ids.push(candidate);
+        continue;
+      }
+      if (candidate && typeof candidate === 'object' && typeof (candidate as { id?: unknown }).id === 'string') {
+        ids.push((candidate as { id: string }).id);
+        continue;
+      }
+    }
+  }
+  return Array.from(new Set(ids));
 }
