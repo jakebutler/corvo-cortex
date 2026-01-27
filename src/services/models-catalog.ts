@@ -45,10 +45,13 @@ export async function refreshAllModelCatalogs(
 ): Promise<Record<ModelProvider, { ok: boolean; count: number; error?: string }>> {
   const results = {} as Record<ModelProvider, { ok: boolean; count: number; error?: string }>;
   const catalogs: ModelCatalog[] = [];
+  const openrouterRaw = providers.includes('openrouter') || providers.includes('openai') || providers.includes('anthropic') || providers.includes('gemini')
+    ? await fetchOpenRouterRaw(env)
+    : null;
 
   for (const provider of providers) {
     try {
-      const catalog = await refreshProviderCatalog(env, provider);
+      const catalog = await refreshProviderCatalog(env, provider, openrouterRaw);
       if (catalog) {
         catalogs.push(catalog);
         results[provider] = { ok: true, count: catalog.models.length };
@@ -92,15 +95,15 @@ export async function getModelCatalog(env: Env, provider: ModelProvider): Promis
   return catalog;
 }
 
-async function refreshProviderCatalog(env: Env, provider: ModelProvider): Promise<ModelCatalog | null> {
+async function refreshProviderCatalog(env: Env, provider: ModelProvider, openrouterRaw: OpenRouterRawModel[] | null): Promise<ModelCatalog | null> {
   let models: ModelRecord[] = [];
 
   switch (provider) {
     case 'openai':
-      models = await fetchOpenAIModels(env);
+      models = await fetchOpenAIModels(env, openrouterRaw);
       break;
     case 'anthropic':
-      models = await fetchAnthropicModels(env);
+      models = await fetchAnthropicModels(env, openrouterRaw);
       break;
     case 'z-ai':
       models = await fetchZaiModels();
@@ -115,7 +118,7 @@ async function refreshProviderCatalog(env: Env, provider: ModelProvider): Promis
       models = await fetchFireworksModels(env);
       break;
     case 'gemini':
-      models = await fetchGeminiModels();
+      models = await fetchGeminiModels(openrouterRaw);
       break;
     default:
       models = [];
@@ -146,8 +149,17 @@ function mergeCatalogs(catalogs: ModelCatalog[]): ModelCatalog {
   };
 }
 
-async function fetchOpenAIModels(env: Env): Promise<ModelRecord[]> {
+async function fetchOpenAIModels(env: Env, openrouterRaw: OpenRouterRawModel[] | null): Promise<ModelRecord[]> {
   const fallback = getOpenAIFallbackModels();
+
+  const fromOpenRouter = openrouterRaw
+    ? deriveOpenRouterSubset(openrouterRaw, 'openai', {
+        includeIds: (id) => /^openai\/gpt-5/i.test(id),
+        limit: 12
+      })
+    : [];
+
+  if (fromOpenRouter.length) return fromOpenRouter;
   if (!env.OPENAI_API_KEY) return fallback;
 
   const response = await fetch(OPENAI_MODELS_URL, {
@@ -157,7 +169,7 @@ async function fetchOpenAIModels(env: Env): Promise<ModelRecord[]> {
   });
 
   if (!response.ok) {
-    return [];
+    return fallback;
   }
 
   const data = await response.json() as { data?: Array<{ id: string; created?: number; owned_by?: string }> };
@@ -211,7 +223,15 @@ function getOpenAIFallbackModels(): ModelRecord[] {
   }));
 }
 
-async function fetchAnthropicModels(env: Env): Promise<ModelRecord[]> {
+async function fetchAnthropicModels(env: Env, openrouterRaw: OpenRouterRawModel[] | null): Promise<ModelRecord[]> {
+  const fromOpenRouter = openrouterRaw
+    ? deriveOpenRouterSubset(openrouterRaw, 'anthropic', {
+        includeIds: (id) => /^anthropic\/claude/i.test(id),
+        limit: 10
+      })
+    : [];
+
+  if (fromOpenRouter.length) return fromOpenRouter;
   if (!env.ANTHROPIC_API_KEY) return [];
 
   const response = await fetch(ANTHROPIC_MODELS_URL, {
@@ -240,28 +260,7 @@ async function fetchAnthropicModels(env: Env): Promise<ModelRecord[]> {
 }
 
 async function fetchOpenRouterModels(env: Env): Promise<ModelRecord[]> {
-  const headers: Record<string, string> = {};
-  if (env.OPENROUTER_API_KEY) {
-    headers.Authorization = `Bearer ${env.OPENROUTER_API_KEY}`;
-  }
-
-  const response = await fetch(OPENROUTER_MODELS_URL, { headers });
-  if (!response.ok) return [];
-
-  const data = await response.json() as { data?: Array<{
-    id: string;
-    name?: string;
-    created?: number;
-    context_length?: number;
-    architecture?: {
-      input_modalities?: string[];
-      output_modalities?: string[];
-      modality?: string;
-    };
-  }> };
-
-  const models = data.data || [];
-
+  const models = await fetchOpenRouterRaw(env);
   return models
     .map(model => ({
       id: model.id,
@@ -277,6 +276,31 @@ async function fetchOpenRouterModels(env: Env): Promise<ModelRecord[]> {
       }
     }))
     .filter(model => isChatOrImageModalities(model.modalities));
+}
+
+interface OpenRouterRawModel {
+  id: string;
+  name?: string;
+  created?: number;
+  context_length?: number;
+  architecture?: {
+    input_modalities?: string[];
+    output_modalities?: string[];
+    modality?: string;
+  };
+}
+
+async function fetchOpenRouterRaw(env: Env): Promise<OpenRouterRawModel[]> {
+  const headers: Record<string, string> = {};
+  if (env.OPENROUTER_API_KEY) {
+    headers.Authorization = `Bearer ${env.OPENROUTER_API_KEY}`;
+  }
+
+  const response = await fetch(OPENROUTER_MODELS_URL, { headers });
+  if (!response.ok) return [];
+
+  const data = await response.json() as { data?: OpenRouterRawModel[] };
+  return data.data || [];
 }
 
 function inferModalities(modality: string | undefined, direction: 'input' | 'output'): string[] | undefined {
@@ -404,7 +428,7 @@ function normalizeFireworksIds(models: unknown[]): string[] {
   return Array.from(new Set(ids));
 }
 
-async function fetchGeminiModels(): Promise<ModelRecord[]> {
+async function fetchGeminiModels(openrouterRaw: OpenRouterRawModel[] | null): Promise<ModelRecord[]> {
   const fallback = [
     'gemini-3-pro-preview',
     'gemini-3-pro-image-preview',
@@ -412,6 +436,15 @@ async function fetchGeminiModels(): Promise<ModelRecord[]> {
     'gemini-2.5-flash',
     'gemini-2.5-flash-preview-09-2025'
   ];
+
+  const fromOpenRouter = openrouterRaw
+    ? deriveOpenRouterSubset(openrouterRaw, 'gemini', {
+        includeIds: (id) => /(google\/)?gemini-3|gemini-2\.5/i.test(id),
+        limit: 10
+      })
+    : [];
+
+  if (fromOpenRouter.length) return fromOpenRouter;
 
   try {
     const response = await fetch(GEMINI_MODELS_URL);
@@ -444,4 +477,53 @@ function geminiRecord(id: string): ModelRecord {
     name: id,
     modalities: isImage ? { input: ['text', 'image'], output: ['image', 'text'] } : { input: ['text'], output: ['text'] }
   };
+}
+
+function deriveOpenRouterSubset(
+  models: OpenRouterRawModel[],
+  provider: ModelProvider,
+  options: { includeIds: (id: string) => boolean; limit: number }
+): ModelRecord[] {
+  const scored = models
+    .filter(model => options.includeIds(model.id))
+    .map(model => ({
+      id: model.id.includes('/') ? model.id.split('/').slice(1).join('/') : model.id,
+      provider,
+      name: model.name || model.id,
+      modalities: {
+        input: model.architecture?.input_modalities || inferModalities(model.architecture?.modality, 'input'),
+        output: model.architecture?.output_modalities || inferModalities(model.architecture?.modality, 'output')
+      },
+      context_length: model.context_length,
+      metadata: {
+        created: model.created,
+        source: 'openrouter'
+      }
+    }))
+    .filter(model => isChatOrImageModalities(model.modalities));
+
+  scored.sort((a, b) => {
+    const createdA = typeof a.metadata?.created === 'number' ? (a.metadata?.created as number) : 0;
+    const createdB = typeof b.metadata?.created === 'number' ? (b.metadata?.created as number) : 0;
+    if (createdA !== createdB) return createdB - createdA;
+    const contextA = a.context_length || 0;
+    const contextB = b.context_length || 0;
+    if (contextA !== contextB) return contextB - contextA;
+    const nameA = (a.name || '').toLowerCase();
+    const nameB = (b.name || '').toLowerCase();
+    const weightA = nameA.includes('pro') || nameA.includes('opus') || nameA.includes('sonnet') ? 1 : 0;
+    const weightB = nameB.includes('pro') || nameB.includes('opus') || nameB.includes('sonnet') ? 1 : 0;
+    return weightB - weightA;
+  });
+
+  const seen = new Set<string>();
+  const result: ModelRecord[] = [];
+  for (const model of scored) {
+    if (seen.has(model.id)) continue;
+    seen.add(model.id);
+    result.push(model);
+    if (result.length >= options.limit) break;
+  }
+
+  return result;
 }
