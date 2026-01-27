@@ -3,7 +3,7 @@ import type { Env, RateLimitUsage, LLMProvider } from '../types';
 import { adminAuthMiddleware } from '../middleware/auth';
 import { getCreditBalance, setCreditBalance, adjustCreditBalance } from '../services/credits';
 import { getProviderPricing, ProviderPricing } from '../services/pricing';
-import { refreshAllModelCatalogs } from '../services/models-catalog';
+import { refreshAllModelCatalogs, ModelProvider } from '../services/models-catalog';
 
 const adminApp = new Hono<{ Bindings: Env }>();
 
@@ -169,7 +169,7 @@ adminApp.post('/pricing', async (c) => {
  * Refresh model catalogs for providers
  */
 adminApp.post('/models/refresh', async (c) => {
-  const body = await c.req.json().catch(() => ({})) as { providers?: LLMProvider[] };
+  const body = await c.req.json().catch(() => ({})) as { providers?: ModelProvider[] };
   const providers = body.providers && Array.isArray(body.providers) ? body.providers : undefined;
 
   const results = await refreshAllModelCatalogs(c.env, providers);

@@ -38,15 +38,17 @@ modelsApp.get('/', async (c) => {
     provider: model.provider,
     name: model.name || model.id
   })) : [
-    { id: 'gpt-4o', provider: 'openai', name: 'GPT-4o' }
+    { id: 'gpt-5.2', provider: 'openai', name: 'gpt-5.2' }
   ];
+
+  const systemDefault = models.find(model => model.id === 'gpt-5.2')?.id || models[0]?.id || 'gpt-5.2';
 
   return c.json({
     object: 'list',
     data: models,
     defaults: {
-      system_default: 'gpt-4o',
-      client_default: client.defaultModel || 'gpt-4o'
+      system_default: systemDefault,
+      client_default: client.defaultModel || systemDefault
     }
   });
 });

@@ -1,7 +1,7 @@
 import type { Env } from '../types';
 import { getFireworksModelCatalog } from './fireworks-models';
 
-export type ModelProvider = 'openai' | 'anthropic' | 'z-ai' | 'minimax' | 'openrouter' | 'fireworks';
+export type ModelProvider = 'openai' | 'anthropic' | 'z-ai' | 'minimax' | 'openrouter' | 'fireworks' | 'gemini';
 
 export interface ModelRecord {
   id: string;
@@ -23,6 +23,7 @@ export interface ModelCatalog {
 const OPENAI_MODELS_URL = 'https://api.openai.com/v1/models';
 const ANTHROPIC_MODELS_URL = 'https://api.anthropic.com/v1/models';
 const OPENROUTER_MODELS_URL = 'https://openrouter.ai/api/v1/models';
+const GEMINI_MODELS_URL = 'https://ai.google.dev/models/gemini';
 const ZAI_CHAT_COMPLETION_URL = 'https://docs.z.ai/api-reference/llm/chat-completion';
 const MINIMAX_OVERVIEW_URL = 'https://platform.minimax.io/docs/api-reference/api-overview';
 
@@ -32,14 +33,15 @@ const MODEL_KEYS: Record<ModelProvider, string> = {
   'z-ai': 'models:z-ai',
   'minimax': 'models:minimax',
   'openrouter': 'models:openrouter',
-  'fireworks': 'models:fireworks:catalog'
+  'fireworks': 'models:fireworks:catalog',
+  'gemini': 'models:gemini'
 };
 
 const ALL_MODELS_KEY = 'models:all';
 
 export async function refreshAllModelCatalogs(
   env: Env,
-  providers: ModelProvider[] = ['openai', 'anthropic', 'z-ai', 'minimax', 'openrouter', 'fireworks']
+  providers: ModelProvider[] = ['openai', 'anthropic', 'z-ai', 'minimax', 'openrouter', 'fireworks', 'gemini']
 ): Promise<Record<ModelProvider, { ok: boolean; count: number; error?: string }>> {
   const results = {} as Record<ModelProvider, { ok: boolean; count: number; error?: string }>;
   const catalogs: ModelCatalog[] = [];
@@ -112,6 +114,9 @@ async function refreshProviderCatalog(env: Env, provider: ModelProvider): Promis
     case 'fireworks':
       models = await fetchFireworksModels(env);
       break;
+    case 'gemini':
+      models = await fetchGeminiModels();
+      break;
     default:
       models = [];
   }
@@ -142,7 +147,8 @@ function mergeCatalogs(catalogs: ModelCatalog[]): ModelCatalog {
 }
 
 async function fetchOpenAIModels(env: Env): Promise<ModelRecord[]> {
-  if (!env.OPENAI_API_KEY) return [];
+  const fallback = getOpenAIFallbackModels();
+  if (!env.OPENAI_API_KEY) return fallback;
 
   const response = await fetch(OPENAI_MODELS_URL, {
     headers: {
@@ -157,33 +163,52 @@ async function fetchOpenAIModels(env: Env): Promise<ModelRecord[]> {
   const data = await response.json() as { data?: Array<{ id: string; created?: number; owned_by?: string }> };
   const models = data.data || [];
 
-  return models
-    .filter(model => isOpenAIChatOrImage(model.id))
-    .map(model => ({
-      id: model.id,
-      provider: 'openai',
-      name: model.id,
-      modalities: inferOpenAIModalities(model.id),
-      metadata: {
-        created: model.created,
-        owned_by: model.owned_by
-      }
-    }));
+  const filtered = models.filter(model => isOpenAIChatOrImage(model.id));
+  if (!filtered.length) return fallback;
+
+  return filtered.map(model => ({
+    id: model.id,
+    provider: 'openai',
+    name: model.id,
+    modalities: inferOpenAIModalities(model.id),
+    metadata: {
+      created: model.created,
+      owned_by: model.owned_by
+    }
+  }));
 }
 
 function isOpenAIChatOrImage(id: string): boolean {
-  const allow = /^(gpt-|o1|omni|gpt-image|dall-e)/i.test(id) || /image/i.test(id);
+  const allow = /^(gpt-5|gpt-5\\.|gpt-5-)/i.test(id);
   if (!allow) return false;
-
   const deny = /(embedding|moderation|whisper|tts|audio|transcribe|realtime|search|assistant|vision-beta|eval|code-embedding)/i.test(id);
   return !deny;
 }
 
 function inferOpenAIModalities(id: string): { input: string[]; output: string[] } {
-  if (/dall-e|gpt-image|image/i.test(id)) {
-    return { input: ['text'], output: ['image'] };
-  }
   return { input: ['text'], output: ['text'] };
+}
+
+function getOpenAIFallbackModels(): ModelRecord[] {
+  const ids = [
+    'gpt-5',
+    'gpt-5-mini',
+    'gpt-5-nano',
+    'gpt-5-chat-latest',
+    'gpt-5-pro',
+    'gpt-5.1',
+    'gpt-5.1-chat-latest',
+    'gpt-5.2',
+    'gpt-5.2-chat-latest',
+    'gpt-5.2-pro'
+  ];
+
+  return ids.map(id => ({
+    id,
+    provider: 'openai',
+    name: id,
+    modalities: { input: ['text'], output: ['text'] }
+  }));
 }
 
 async function fetchAnthropicModels(env: Env): Promise<ModelRecord[]> {
@@ -377,4 +402,46 @@ function normalizeFireworksIds(models: unknown[]): string[] {
     }
   }
   return Array.from(new Set(ids));
+}
+
+async function fetchGeminiModels(): Promise<ModelRecord[]> {
+  const fallback = [
+    'gemini-3-pro-preview',
+    'gemini-3-pro-image-preview',
+    'gemini-3-flash-preview',
+    'gemini-2.5-flash',
+    'gemini-2.5-flash-preview-09-2025'
+  ];
+
+  try {
+    const response = await fetch(GEMINI_MODELS_URL);
+    if (!response.ok) {
+      return fallback.map(id => geminiRecord(id));
+    }
+
+    const html = await response.text();
+    const codes = new Set<string>();
+    const matches = html.matchAll(/Model code `([^`]+)`/g);
+    for (const match of matches) {
+      if (match[1] && match[1].startsWith('gemini-')) {
+        codes.add(match[1]);
+      }
+    }
+
+    const filtered = Array.from(codes).filter(code => code.startsWith('gemini-3') || code.startsWith('gemini-2.5'));
+    const finalList = filtered.length ? filtered : fallback;
+    return finalList.map(id => geminiRecord(id));
+  } catch {
+    return fallback.map(id => geminiRecord(id));
+  }
+}
+
+function geminiRecord(id: string): ModelRecord {
+  const isImage = id.includes('image');
+  return {
+    id,
+    provider: 'gemini',
+    name: id,
+    modalities: isImage ? { input: ['text', 'image'], output: ['image', 'text'] } : { input: ['text'], output: ['text'] }
+  };
 }
