@@ -76,13 +76,14 @@ describe('Models Route - /v1/models', () => {
             expect(response.status).toBe(200);
             const json = await response.json() as {
                 object: string;
-                data: Array<{ id: string }>;
+                data: Array<{ id: string; source?: string }>;
                 defaults: { client_default: string }
             };
             expect(json.object).toBe('list');
             expect(Array.isArray(json.data)).toBe(true);
             expect(json.data.length).toBeGreaterThan(0);
             expect(json.data.some(m => m.id === 'gpt-4o')).toBe(true);
+            expect(json.data.some(m => m.source)).toBe(true);
         });
 
         it('should return correct client default model', async () => {

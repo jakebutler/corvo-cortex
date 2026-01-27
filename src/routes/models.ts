@@ -36,9 +36,10 @@ modelsApp.get('/', async (c) => {
   const models = sourceModels.length ? sourceModels.map(model => ({
     id: model.id,
     provider: model.provider,
-    name: model.name || model.id
+    name: model.name || model.id,
+    source: typeof model.metadata?.source === 'string' ? model.metadata.source : 'direct'
   })) : [
-    { id: 'gpt-5.2', provider: 'openai', name: 'gpt-5.2' }
+    { id: 'gpt-5.2', provider: 'openai', name: 'gpt-5.2', source: 'direct' }
   ];
 
   const systemDefault = models.find(model => model.id === 'gpt-5.2')?.id || models[0]?.id || 'gpt-5.2';
