@@ -1,5 +1,5 @@
 import type { Env } from '../types';
-import { getFireworksModelCatalog } from './fireworks-models';
+import { getFireworksModelCatalog, refreshFireworksModelCatalog } from './fireworks-models';
 
 export type ModelProvider = 'openai' | 'anthropic' | 'z-ai' | 'minimax' | 'openrouter' | 'fireworks' | 'gemini';
 
@@ -115,6 +115,7 @@ async function refreshProviderCatalog(env: Env, provider: ModelProvider, openrou
       models = await fetchOpenRouterModels(env);
       break;
     case 'fireworks':
+      await refreshFireworksModelCatalog(env);
       models = await fetchFireworksModels(env);
       break;
     case 'gemini':
