@@ -1,8 +1,15 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { Hono } from 'hono';
+import { vi } from 'vitest';
 import adminApp from '../../../src/routes/admin';
 import { createMockKV, createMockClientConfig, TEST_API_KEY, ADMIN_API_KEY } from '../../mocks/env';
 import type { Env, RateLimitUsage } from '../../../src/types';
+
+vi.mock('../../../src/services/models-catalog', () => ({
+    refreshAllModelCatalogs: vi.fn(async () => ({
+        openai: { ok: true, count: 1 }
+    }))
+}));
 
 describe('Admin Route - /admin', () => {
     let mockEnv: Env;
@@ -118,6 +125,22 @@ describe('Admin Route - /admin', () => {
             expect(response.status).toBe(200);
             const json = await response.json() as { message: string };
             expect(json.message).toContain('Client listing requires a separate index');
+        });
+    });
+
+    describe('POST /models/refresh', () => {
+        it('should refresh model catalogs', async () => {
+            const request = new Request('http://localhost/models/refresh', {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${ADMIN_API_KEY}` },
+                body: JSON.stringify({})
+            });
+
+            const response = await adminApp.fetch(request, mockEnv);
+
+            expect(response.status).toBe(200);
+            const json = await response.json() as { results: { openai: { ok: boolean; count: number } } };
+            expect(json.results.openai.ok).toBe(true);
         });
     });
 });
