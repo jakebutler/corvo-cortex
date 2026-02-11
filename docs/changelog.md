@@ -8,7 +8,14 @@ This changelog follows [Keep a Changelog](https://keepachangelog.com/) format an
 
 ## [Unreleased]
 
-*Changes staged for next release go here.*
+### Changed
+- Telemetry transport switched from Langfuse JS SDK event flushing to direct Langfuse ingestion API calls in Workers runtime.
+- Telemetry now captures both successful and failed requests with full prompt/response payloads.
+- Streaming telemetry now waits for stream completion before final trace ingestion.
+
+### Fixed
+- Resolved a production issue where Langfuse SDK v3 in Cloudflare Workers could flush without persisted traces.
+- Added explicit workaround and upstream issue reference: https://github.com/langfuse/langfuse/issues/11984
 
 ---
 

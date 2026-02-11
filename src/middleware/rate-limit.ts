@@ -1,10 +1,6 @@
 import { MiddlewareHandler } from 'hono';
 import type { Env, Variables, ClientConfig, RateLimitUsage } from '../types';
 
-declare module 'hono' {
-  type ContextVariableMap = Variables;
-}
-
 /**
  * Get the current rate limit key based on API key and minute
  */

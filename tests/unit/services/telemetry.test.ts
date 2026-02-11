@@ -1,163 +1,145 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { TelemetryService } from '../../../src/services/telemetry';
-import { Langfuse } from 'langfuse';
+import { TelemetryService, DEFAULT_LANGFUSE_BASE_URL } from '../../../src/services/telemetry';
 import type { Env } from '../../../src/types';
 
-vi.mock('langfuse');
-
 describe('Telemetry Service', () => {
-    let service: TelemetryService;
-    let mockEnv: Env;
-    let mockConsole: any;
-    let mockLangfuseInstance: any;
-    let mockTrace: any;
+  let mockEnv: Env;
+  let fetchSpy: ReturnType<typeof vi.spyOn>;
+  let warnSpy: ReturnType<typeof vi.spyOn>;
+  let errorSpy: ReturnType<typeof vi.spyOn>;
 
-    beforeEach(() => {
-        mockEnv = {
-            LANGFUSE_PUBLIC_KEY: 'pk-test',
-            LANGFUSE_SECRET_KEY: 'sk-test',
-            LANGFUSE_BASE_URL: 'https://test.langfuse.com'
-        } as Env;
+  beforeEach(() => {
+    (TelemetryService as unknown as { warnedMissingKeys: boolean }).warnedMissingKeys = false;
+    (TelemetryService as unknown as { warnedDefaultBaseUrl: boolean }).warnedDefaultBaseUrl = false;
 
-        // Setup mock Langfuse instance
-        mockTrace = {
-            generation: vi.fn().mockResolvedValue(undefined)
-        };
-        mockLangfuseInstance = {
-            trace: vi.fn().mockReturnValue(mockTrace),
-            flushAsync: vi.fn().mockResolvedValue(undefined),
-            shutdownAsync: vi.fn().mockResolvedValue(undefined)
-        };
+    mockEnv = {
+      LANGFUSE_PUBLIC_KEY: 'pk-test',
+      LANGFUSE_SECRET_KEY: 'sk-test',
+      LANGFUSE_BASE_URL: 'https://test.langfuse.com',
+      ENVIRONMENT: 'test'
+    } as Env;
 
-        // Mock constructor behavior
-        vi.mocked(Langfuse).mockImplementation(() => mockLangfuseInstance);
+    fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ successes: [{ id: 'evt', status: 201 }], errors: [] }), {
+        status: 207,
+        headers: { 'Content-Type': 'application/json' }
+      })
+    );
+    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+  });
 
-        service = new TelemetryService(mockEnv);
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
 
-        // Spy on console
-        mockConsole = {
-            log: vi.fn(),
-            error: vi.fn()
-        };
-        vi.stubGlobal('console', mockConsole);
+  it('sends trace and generation events via Langfuse ingestion API', async () => {
+    const service = new TelemetryService(mockEnv);
 
-        vi.clearAllMocks();
+    await service.createTrace({
+      name: 'llm-request',
+      appId: 'test-app',
+      provider: 'openai-direct',
+      model: 'gpt-4o',
+      input: { messages: [{ role: 'user', content: 'hello' }] },
+      output: { choices: [{ message: { content: 'hi' } }] },
+      statusCode: 200,
+      startTime: Date.now() - 100,
+      endTime: Date.now(),
+      usage: {
+        promptTokens: 10,
+        completionTokens: 5,
+        totalTokens: 15
+      }
     });
 
-    afterEach(() => {
-        vi.restoreAllMocks();
-        vi.unstubAllGlobals();
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchSpy.mock.calls[0];
+    expect(url).toBe('https://test.langfuse.com/api/public/ingestion');
+    expect(init?.method).toBe('POST');
+    expect(init?.headers).toEqual(expect.objectContaining({
+      'Content-Type': 'application/json'
+    }));
+
+    const payload = JSON.parse(String(init?.body)) as { batch: Array<{ type: string; body: { metadata?: { appId?: string }; usage?: { total?: number } } }> };
+    expect(payload.batch).toHaveLength(2);
+    expect(payload.batch[0].type).toBe('trace-create');
+    expect(payload.batch[0].body.metadata?.appId).toBe('test-app');
+    expect(payload.batch[1].type).toBe('generation-create');
+    expect(payload.batch[1].body.usage?.total).toBe(15);
+  });
+
+  it('falls back to US region if base URL is not configured and warns once', async () => {
+    const service = new TelemetryService({
+      ...mockEnv,
+      LANGFUSE_BASE_URL: undefined
+    } as Env);
+
+    await service.createTrace({
+      name: 'llm-request',
+      appId: 'test-app',
+      provider: 'openai-direct',
+      model: 'gpt-4o',
+      input: { messages: [] },
+      statusCode: 200,
+      startTime: Date.now() - 10,
+      endTime: Date.now()
     });
 
-    describe('estimateCost', () => {
-        it('should estimate cost for GPT-4o', () => {
-            const cost = service.estimateCost({
-                provider: 'openai-direct',
-                model: 'gpt-4o',
-                promptTokens: 1000,
-                completionTokens: 1000
-            });
-            expect(cost).toBeCloseTo(0.0125);
-        });
+    const [url] = fetchSpy.mock.calls[0];
+    expect(url).toBe(`${DEFAULT_LANGFUSE_BASE_URL}/api/public/ingestion`);
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('LANGFUSE_BASE_URL is not set'));
+  });
 
-        it('should estimate cost for Claude 3.5 Sonnet', () => {
-            const cost = service.estimateCost({
-                provider: 'anthropic-direct',
-                model: 'claude-3-5-sonnet',
-                promptTokens: 1000,
-                completionTokens: 1000
-            });
-            expect(cost).toBeCloseTo(0.018);
-        });
+  it('does not send traces when credentials are missing', async () => {
+    const service = new TelemetryService({
+      ...mockEnv,
+      LANGFUSE_PUBLIC_KEY: '',
+      LANGFUSE_SECRET_KEY: ''
+    } as Env);
 
-        it('should use default cost for unknown model in OpenRouter', () => {
-            const cost = service.estimateCost({
-                provider: 'openrouter',
-                model: 'unknown-model',
-                promptTokens: 1000,
-                completionTokens: 1000
-            });
-            expect(cost).toBeCloseTo(0.002);
-        });
+    await service.createTrace({
+      name: 'llm-request',
+      appId: 'test-app',
+      provider: 'openai-direct',
+      model: 'gpt-4o',
+      input: { messages: [] },
+      statusCode: 200,
+      startTime: Date.now() - 10,
+      endTime: Date.now()
     });
 
-    describe('createTrace', () => {
-        it('should create trace and generation', async () => {
-            const params = {
-                name: 'test-trace',
-                appId: 'test-app',
-                provider: 'openai',
-                model: 'gpt-4o',
-                input: 'test input',
-                startTime: Date.now(),
-                usage: {
-                    promptTokens: 10,
-                    completionTokens: 5,
-                    totalTokens: 15
-                }
-            };
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('credentials are missing'));
+  });
 
-            await service.createTrace(params);
+  it('logs ingestion errors from API response', async () => {
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify({
+        successes: [],
+        errors: [{ id: 'evt-1', message: 'bad payload' }]
+      }), {
+        status: 207,
+        headers: { 'Content-Type': 'application/json' }
+      })
+    );
 
-            expect(mockLangfuseInstance.trace).toHaveBeenCalledWith(expect.objectContaining({
-                name: 'test-trace',
-                metadata: expect.objectContaining({
-                    appId: 'test-app',
-                    provider: 'openai',
-                    model: 'gpt-4o'
-                })
-            }));
+    const service = new TelemetryService(mockEnv);
 
-            expect(mockTrace.generation).toHaveBeenCalledWith(expect.objectContaining({
-                model: 'gpt-4o',
-                input: 'test input',
-                usage: {
-                    input: 10,
-                    output: 5,
-                    total: 15
-                }
-            }));
-
-            expect(mockLangfuseInstance.flushAsync).toHaveBeenCalled();
-        });
-
-        it('should handle errors gracefully', async () => {
-            mockLangfuseInstance.trace.mockImplementationOnce(() => {
-                throw new Error('Trace failed');
-            });
-
-            await service.createTrace({
-                name: 'test',
-                appId: 'test',
-                provider: 'test',
-                model: 'test',
-                input: 'test'
-            });
-
-            expect(mockConsole.error).toHaveBeenCalledWith(
-                expect.stringContaining('LangFuse trace creation failed'),
-                expect.any(Error)
-            );
-        });
+    await service.createTrace({
+      name: 'llm-request',
+      appId: 'test-app',
+      provider: 'openai-direct',
+      model: 'gpt-4o',
+      input: { messages: [] },
+      statusCode: 500,
+      startTime: Date.now() - 10,
+      endTime: Date.now()
     });
 
-    describe('logEvent', () => {
-        it('should log event as JSON', () => {
-            service.logEvent({
-                event: 'test_event',
-                appId: 'test',
-                provider: 'openai',
-                model: 'gpt-4o',
-                metadata: { val: 1 }
-            });
-
-            expect(mockConsole.log).toHaveBeenCalledTimes(1);
-            const logData = JSON.parse(mockConsole.log.mock.calls[0][0]);
-
-            expect(logData.event).toBe('test_event');
-            expect(logData.appId).toBe('test');
-            expect(logData.metadata).toEqual({ val: 1 });
-            expect(logData.timestamp).toBeDefined();
-        });
-    });
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Langfuse ingestion returned errors:'),
+      expect.any(Array)
+    );
+  });
 });

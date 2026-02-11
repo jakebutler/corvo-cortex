@@ -96,6 +96,13 @@ export interface Variables {
     provider: string;
     model: string;
     input: unknown;
+    completion?: Promise<void>;
+    deferCompletion?: boolean;
+  };
+  telemetryUsage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
   };
   responseData?: unknown;
 }

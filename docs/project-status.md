@@ -1,7 +1,7 @@
 # Project Status
 
 **Current Version:** 2.2.0  
-**Last Updated:** January 6, 2026
+**Last Updated:** February 11, 2026
 
 ---
 
@@ -40,11 +40,17 @@
    - Impact: Cost/metrics endpoints point to LangFuse dashboard
    - Reason: By design - LangFuse is the source of truth for analytics
 
+3. **Upstream Langfuse SDK issue in Workers (tracked externally)**
+   - Issue: https://github.com/langfuse/langfuse/issues/11984
+   - Impact: SDK v3 flush path may report success without persisted traces in Cloudflare Workers.
+   - Workaround in Corvo Cortex: use direct Langfuse ingestion API transport (`/api/public/ingestion`).
+
 ### Resolved Recently
 
 - ✅ ESM module loading errors (fixed in 2.3.0)
 - ✅ Production/preview namespace collision (fixed in 2.3.0)
 - ✅ Lodash security vulnerability (fixed in 2.3.0)
+- ✅ Production Langfuse trace ingestion verified (success + failure traces)
 
 ---
 

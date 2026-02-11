@@ -2,7 +2,8 @@ import { MiddlewareHandler } from 'hono';
 import type { Env, Variables, ClientConfig } from '../types';
 
 declare module 'hono' {
-  type ContextVariableMap = Variables;
+  // eslint-disable-next-line @typescript-eslint/no-empty-object-type
+  interface ContextVariableMap extends Variables {}
 }
 
 /**

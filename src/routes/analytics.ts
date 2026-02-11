@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import type { Env } from '../types';
 import { adminAuthMiddleware } from '../middleware/auth';
+import { DEFAULT_LANGFUSE_BASE_URL } from '../services/telemetry';
 
 const analyticsApp = new Hono<{ Bindings: Env }>();
 
@@ -19,7 +20,7 @@ analyticsApp.get('/costs', async (c) => {
   // In production, you'd query LangFuse API or maintain local cost tracking
   return c.json({
     message: 'Cost data is available in LangFuse dashboard',
-    langfuseUrl: 'https://cloud.langfuse.com',
+    langfuseUrl: DEFAULT_LANGFUSE_BASE_URL,
     params: { from, to, appId },
     note: 'Use LangFuse dashboard for detailed cost analysis per app and provider'
   });
@@ -35,7 +36,7 @@ analyticsApp.get('/metrics', async (c) => {
   // Placeholder metrics - in production, aggregate from LangFuse
   return c.json({
     message: 'Metrics are available in LangFuse dashboard',
-    langfuseUrl: 'https://cloud.langfuse.com',
+    langfuseUrl: DEFAULT_LANGFUSE_BASE_URL,
     filters: { appId },
     availableMetrics: [
       'total_requests',
@@ -57,7 +58,7 @@ analyticsApp.get('/export', async (c) => {
 
   // Return link to LangFuse export
   return c.json({
-    exportUrl: 'https://cloud.langfuse.com',
+    exportUrl: DEFAULT_LANGFUSE_BASE_URL,
     instructions: 'Use LangFuse dashboard to export data in CSV or JSON format',
     params: { format, appId, from, to }
   });

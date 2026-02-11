@@ -49,6 +49,8 @@ echo ""
 
 echo "✅ All secrets configured successfully!"
 echo ""
+echo "📌 Ensure LANGFUSE_BASE_URL is set in wrangler.toml vars (recommended: https://us.cloud.langfuse.com)"
+echo ""
 echo "Next steps:"
 echo "1. Create KV namespaces: ./scripts/create-kv-namespaces.sh"
 echo "2. Deploy to production: npm run deploy"

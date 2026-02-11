@@ -315,7 +315,7 @@ open reports/eslint-report.html
 
 ### LangFuse Dashboard
 
-Access https://cloud.langfuse.com to monitor:
+Access https://us.cloud.langfuse.com to monitor:
 - Request volume per app
 - Error rates by provider
 - Latency metrics

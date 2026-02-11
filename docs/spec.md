@@ -1,6 +1,6 @@
 # Corvo Cortex Specification
 
-**Version:** 2.2.0 | **Last Updated:** January 6, 2026
+**Version:** 2.2.0 | **Last Updated:** February 11, 2026
 
 ---
 
@@ -15,7 +15,7 @@ Corvo Cortex is a **serverless AI Gateway and Smart Router** that acts as the ce
 - **Rate Limiting** - Per-client quotas (requests/minute, tokens/minute)
 - **Circuit Breaker** - Prevents cascading failures with auto-recovery
 - **Streaming Support** - Real-time SSE streaming for all providers
-- **Telemetry** - LangFuse integration for cost tracking and analytics
+- **Telemetry** - Langfuse integration for cost tracking and analytics
 - **Retry Logic** - Exponential backoff for transient failures
 
 ---
@@ -27,7 +27,7 @@ Corvo Cortex is a **serverless AI Gateway and Smart Router** that acts as the ce
 | Runtime | Cloudflare Workers |
 | Framework | Hono v4 |
 | Validation | Zod v3.22 |
-| Telemetry | LangFuse v3 |
+| Telemetry | Langfuse Cloud Ingestion API |
 | State | Cloudflare Durable Objects |
 | Storage | Cloudflare KV |
 | Language | TypeScript 5.3 |
@@ -49,7 +49,7 @@ src/
 ├── middleware/
 │   ├── auth.ts                 # API key validation
 │   ├── rate-limit.ts           # Request/token quota enforcement
-│   └── telemetry.ts            # LangFuse trace logging
+│   └── telemetry.ts            # Langfuse trace logging + ingestion orchestration
 ├── providers/
 │   ├── base.ts                 # ProviderAdapter interface
 │   ├── anthropic.ts            # Claude API adapter
@@ -58,7 +58,7 @@ src/
 │   └── openrouter.ts           # OpenRouter fallback adapter
 ├── services/
 │   ├── router.ts               # Provider selection logic
-│   └── telemetry.ts            # LangFuse service wrapper
+│   └── telemetry.ts            # Langfuse ingestion service
 ├── schemas/
 │   ├── chat.ts                 # Request validation schemas
 │   └── response.ts             # Response validation schemas
@@ -121,9 +121,10 @@ interface Env {
   OPENROUTER_API_KEY: string;
   MINIMAX_API_KEY: string;
 
-  // LangFuse (secrets)
+  // Langfuse (secrets)
   LANGFUSE_PUBLIC_KEY: string;
   LANGFUSE_SECRET_KEY: string;
+  LANGFUSE_BASE_URL?: string;
 
   // Credit flags
   CREDITS_ANTHROPIC?: string;   // "true" if credits available
@@ -240,7 +241,7 @@ Client Request
 └────────┬────────┘
          ↓
 ┌─────────────────┐
-│ Telemetry Log   │ (async, non-blocking)
+│ Telemetry Ingest│ (async, non-blocking)
 └────────┬────────┘
          ↓
     Response
@@ -272,6 +273,14 @@ Client Request
 | 403 | Forbidden | Admin access required |
 | 429 | Rate limit exceeded | Quota exceeded (requests or tokens) |
 | 503 | Service unavailable | Circuit breaker open |
+
+---
+
+## Telemetry Runtime Note
+
+- Corvo Cortex currently uses direct calls to Langfuse ingestion API (`/api/public/ingestion`) in production Workers runtime.
+- Reason: observed SDK v3 behavior where flush could succeed without persisted traces in Cloudflare Workers.
+- Upstream issue: https://github.com/langfuse/langfuse/issues/11984
 
 ---
 

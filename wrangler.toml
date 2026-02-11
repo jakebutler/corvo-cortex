@@ -35,6 +35,7 @@ new_sqlite_classes = ["CreditLedger"]
 # Environment variables
 [vars]
 ENVIRONMENT = "development"
+LANGFUSE_BASE_URL = "https://us.cloud.langfuse.com"
 
 [triggers]
 crons = ["0 0 * * *"]
@@ -51,6 +52,7 @@ crons = ["0 0 * * *"]
 # OPENROUTER_API_KEY
 # LANGFUSE_PUBLIC_KEY
 # LANGFUSE_SECRET_KEY
+# LANGFUSE_BASE_URL is a non-secret var (set in [vars])
 
 # Production configuration
 [env.production]
@@ -91,3 +93,4 @@ ENVIRONMENT = "production"
 CREDITS_ANTHROPIC = "true"
 CREDITS_OPENAI = "true"
 CREDITS_MINIMAX = "true"
+LANGFUSE_BASE_URL = "https://us.cloud.langfuse.com"

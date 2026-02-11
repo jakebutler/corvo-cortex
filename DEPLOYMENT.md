@@ -143,7 +143,7 @@ corvo-api.corvolabs.workers.dev -> corvo-cortex-pro.<your-subdomain>.workers.dev
 
 ### 6.1 LangFuse Dashboard
 
-Access your LangFuse dashboard at https://cloud.langfuse.com to monitor:
+Access your LangFuse dashboard at https://us.cloud.langfuse.com to monitor:
 - Request volume per app
 - Error rates by provider
 - Latency metrics

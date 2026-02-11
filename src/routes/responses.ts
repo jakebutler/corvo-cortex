@@ -2,7 +2,13 @@ import { Hono } from 'hono';
 import type { Env, LLMProvider } from '../types';
 import { authMiddleware } from '../middleware/auth';
 import { rateLimitCheckMiddleware, rateLimitIncrementMiddleware } from '../middleware/rate-limit';
-import { telemetryMiddleware, updateTelemetryMetadata, storeResponseData } from '../middleware/telemetry';
+import {
+  telemetryMiddleware,
+  updateTelemetryMetadata,
+  storeResponseData,
+  storeTelemetryUsage,
+  setTelemetryCompletion
+} from '../middleware/telemetry';
 import { getCreditBalance, deductCredits } from '../services/credits';
 import { estimateCostFromUsage } from '../services/pricing';
 import { createStreamingResponseWithUsage } from '../utils/streaming';
@@ -67,9 +73,14 @@ responsesApp.post('/', async (c) => {
   const rawBody = await c.req.json();
   c.set('requestBody', rawBody);
 
+  const requestedModel = typeof rawBody?.model === 'string' ? rawBody.model : 'unknown';
+  updateTelemetryMetadata(c, 'fireworks', requestedModel, rawBody);
+
   const model = rawBody?.model as string | undefined;
   if (!model || typeof model !== 'string') {
-    return c.json({ error: 'Invalid request', details: 'Missing model' }, 400);
+    const errorPayload = { error: 'Invalid request', details: 'Missing model' };
+    storeResponseData(c, errorPayload);
+    return c.json(errorPayload, 400);
   }
 
   const provider: LLMProvider = 'fireworks';
@@ -77,11 +88,13 @@ responsesApp.post('/', async (c) => {
 
   const circuitCheck = await checkCircuitBreaker(c.env, provider);
   if (!circuitCheck.allowed) {
-    return c.json({
+    const errorPayload = {
       error: 'Service temporarily unavailable',
       reason: circuitCheck.reason || 'Circuit breaker is open',
       provider
-    }, 503);
+    };
+    storeResponseData(c, errorPayload);
+    return c.json(errorPayload, 503);
   }
 
   const balance = await getCreditBalance(c.env, provider);
@@ -89,11 +102,13 @@ responsesApp.post('/', async (c) => {
     c.header('X-Corvo-Provider', provider);
     c.header('X-Corvo-Fallback', 'false');
     c.header('X-Corvo-Fallback-Reason', 'insufficient_credits');
-    return c.json({
+    const errorPayload = {
       error: 'Payment Required',
       message: 'Provider credits exhausted.',
       provider
-    }, 402);
+    };
+    storeResponseData(c, errorPayload);
+    return c.json(errorPayload, 402);
   }
 
   const route = {
@@ -128,37 +143,82 @@ responsesApp.post('/', async (c) => {
       await recordCircuitBreakerFailure(c.env, route.provider);
 
       const errorText = await response.text();
-      return c.json({
+      const errorPayload = {
         error: 'Provider error',
         provider: route.provider,
         details: errorText
-      }, response.status as 400 | 500 | 502 | 503);
+      };
+      storeResponseData(c, errorPayload);
+      return c.json(errorPayload, response.status as 400 | 500 | 502 | 503);
     }
 
     await recordCircuitBreakerSuccess(c.env, route.provider);
 
     const isStreaming = !!rawBody?.stream;
     if (isStreaming) {
-      const streamingResponse = await createStreamingResponseWithUsage(response, {
-        onUsage: async (usage) => {
-          if (!balance.configured) return;
-          const cost = await estimateCostFromUsage({
-            env: c.env,
-            provider,
-            model,
-            promptTokens: usage.prompt_tokens || 0,
-            completionTokens: usage.completion_tokens || 0
-          });
-          await deductCredits(c.env, provider, cost);
-        }
+      let resolveTelemetryCompletion: (() => void) | undefined;
+      const telemetryCompletion = new Promise<void>((resolve) => {
+        resolveTelemetryCompletion = resolve;
       });
-      streamingResponse.headers.set('X-Corvo-Provider', provider);
-      streamingResponse.headers.set('X-Corvo-Fallback', 'false');
-      return streamingResponse;
+      setTelemetryCompletion(c, telemetryCompletion);
+
+      let streamUsage: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } | undefined;
+      let streamOutput = '';
+
+      try {
+        const streamingResponse = await createStreamingResponseWithUsage(response, {
+          onChunk: (chunk) => {
+            streamOutput += chunk;
+          },
+          onUsage: async (usage) => {
+            streamUsage = usage;
+            storeTelemetryUsage(c, usage);
+
+            if (!balance.configured) return;
+            const cost = await estimateCostFromUsage({
+              env: c.env,
+              provider,
+              model,
+              promptTokens: usage.prompt_tokens || 0,
+              completionTokens: usage.completion_tokens || 0
+            });
+            await deductCredits(c.env, provider, cost);
+          },
+          onDone: () => {
+            storeResponseData(c, {
+              stream: true,
+              output: streamOutput,
+              usage: streamUsage
+            });
+            resolveTelemetryCompletion?.();
+          },
+          onError: (error) => {
+            storeResponseData(c, {
+              stream: true,
+              output: streamOutput,
+              usage: streamUsage,
+              error: error instanceof Error ? error.message : 'Stream processing error'
+            });
+            resolveTelemetryCompletion?.();
+          }
+        });
+        streamingResponse.headers.set('X-Corvo-Provider', provider);
+        streamingResponse.headers.set('X-Corvo-Fallback', 'false');
+        return streamingResponse;
+      } catch (streamError) {
+        resolveTelemetryCompletion?.();
+        throw streamError;
+      }
     }
 
-    const responseData = await response.json();
+    const responseData = await response.json() as {
+      usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+      [key: string]: unknown;
+    };
     storeResponseData(c, responseData);
+    if (responseData?.usage) {
+      storeTelemetryUsage(c, responseData.usage);
+    }
 
     if (balance.configured && responseData?.usage) {
       const cost = await estimateCostFromUsage({
@@ -179,11 +239,13 @@ responsesApp.post('/', async (c) => {
   } catch (error) {
     await recordCircuitBreakerFailure(c.env, provider);
 
-    return c.json({
+    const errorPayload = {
       error: 'Failed to complete request',
       provider,
       details: error instanceof Error ? error.message : 'Unknown error'
-    }, 500);
+    };
+    storeResponseData(c, errorPayload);
+    return c.json(errorPayload, 500);
   }
 });
 

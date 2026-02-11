@@ -2,7 +2,13 @@ import { Hono } from 'hono';
 import type { Env } from '../types';
 import { authMiddleware } from '../middleware/auth';
 import { rateLimitCheckMiddleware, rateLimitIncrementMiddleware } from '../middleware/rate-limit';
-import { telemetryMiddleware, updateTelemetryMetadata, storeResponseData } from '../middleware/telemetry';
+import {
+  telemetryMiddleware,
+  updateTelemetryMetadata,
+  storeResponseData,
+  storeTelemetryUsage,
+  setTelemetryCompletion
+} from '../middleware/telemetry';
 import { determineProvider } from '../services/router';
 import { estimateCostFromUsage } from '../services/pricing';
 import { getCreditBalance, deductCredits } from '../services/credits';
@@ -88,30 +94,41 @@ chatApp.post('/', async (c) => {
   // Store request body for rate limit token estimation
   c.set('requestBody', rawBody);
 
+  const requestedModel = typeof rawBody?.model === 'string'
+    ? rawBody.model
+    : (client.defaultModel || 'gpt-4o');
+  updateTelemetryMetadata(c, 'unresolved', requestedModel, rawBody);
+
   // Validate request with Zod
   const validationResult = chatCompletionRequestSchema.safeParse(rawBody);
   if (!validationResult.success) {
-    return c.json({
+    const errorPayload = {
       error: 'Invalid request',
       details: validationResult.error.errors
-    }, 400);
+    };
+    storeResponseData(c, errorPayload);
+    return c.json(errorPayload, 400);
   }
 
   const body = validationResult.data;
 
   // Determine which provider to use
   const model = body.model || client.defaultModel || 'gpt-4o';
-  let route;
+  let route: Awaited<ReturnType<typeof determineProvider>>;
   try {
     route = await determineProvider(model, client, c.env);
   } catch (error) {
     if (error instanceof Error && error.message.includes('Payment Required')) {
-      return c.json({
+      const errorPayload = {
         error: 'Payment Required',
         message: error.message
-      }, 402);
+      };
+      storeResponseData(c, errorPayload);
+      return c.json(errorPayload, 402);
     }
-    return c.json({ error: 'Internal server error' }, 500);
+    const errorPayload = { error: 'Internal server error' };
+    storeResponseData(c, errorPayload);
+    return c.json(errorPayload, 500);
   }
 
   // Update telemetry metadata
@@ -120,22 +137,26 @@ chatApp.post('/', async (c) => {
   // Check circuit breaker
   const circuitCheck = await checkCircuitBreaker(c.env, route.provider);
   if (!circuitCheck.allowed) {
-    return c.json({
+    const errorPayload = {
       error: 'Service temporarily unavailable',
       reason: circuitCheck.reason || 'Circuit breaker is open',
       provider: route.provider
-    }, 503);
+    };
+    storeResponseData(c, errorPayload);
+    return c.json(errorPayload, 503);
   }
 
   // Skip provider if configured credits are depleted
   const preBalance = await getCreditBalance(c.env, route.provider);
   if (preBalance.configured && preBalance.balance <= 0 && route.provider !== 'openrouter') {
     if (client.fallbackStrategy === 'fail-fast') {
-      return c.json({
+      const errorPayload = {
         error: 'Payment Required',
         message: 'Provider credits exhausted. Fail-fast policy enabled.',
         provider: route.provider
-      }, 402);
+      };
+      storeResponseData(c, errorPayload);
+      return c.json(errorPayload, 402);
     }
 
     route = {
@@ -182,11 +203,13 @@ chatApp.post('/', async (c) => {
       await recordCircuitBreakerFailure(c.env, route.provider);
 
       const errorText = await response.text();
-      return c.json({
+      const errorPayload = {
         error: 'Provider error',
         provider: route.provider,
         details: errorText
-      }, response.status as 400 | 500 | 502 | 503);
+      };
+      storeResponseData(c, errorPayload);
+      return c.json(errorPayload, response.status as 400 | 500 | 502 | 503);
     }
 
     // Record success in circuit breaker
@@ -201,25 +224,62 @@ chatApp.post('/', async (c) => {
 
     // Handle streaming response
     if (body.stream) {
-      const streamingResponse = await createStreamingResponseWithUsage(response, {
-        onUsage: async (usage) => {
-          if (!finalBalance.configured) return;
-          const cost = await estimateCostFromUsage({
-            env: c.env,
-            provider: route.provider,
-            model,
-            promptTokens: usage.prompt_tokens || 0,
-            completionTokens: usage.completion_tokens || 0
-          });
-          await deductCredits(c.env, route.provider, cost);
-        }
+      let resolveTelemetryCompletion: (() => void) | undefined;
+      const telemetryCompletion = new Promise<void>((resolve) => {
+        resolveTelemetryCompletion = resolve;
       });
-      streamingResponse.headers.set('X-Corvo-Provider', route.provider);
-      streamingResponse.headers.set('X-Corvo-Fallback', route.fallback ? 'true' : 'false');
-      if (route.fallback) {
-        streamingResponse.headers.set('X-Corvo-Fallback-Reason', route.fallback.reason);
+      setTelemetryCompletion(c, telemetryCompletion);
+
+      let streamUsage: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } | undefined;
+      let streamOutput = '';
+
+      try {
+        const streamingResponse = await createStreamingResponseWithUsage(response, {
+          onChunk: (chunk) => {
+            streamOutput += chunk;
+          },
+          onUsage: async (usage) => {
+            streamUsage = usage;
+            storeTelemetryUsage(c, usage);
+
+            if (!finalBalance.configured) return;
+            const cost = await estimateCostFromUsage({
+              env: c.env,
+              provider: route.provider,
+              model,
+              promptTokens: usage.prompt_tokens || 0,
+              completionTokens: usage.completion_tokens || 0
+            });
+            await deductCredits(c.env, route.provider, cost);
+          },
+          onDone: () => {
+            storeResponseData(c, {
+              stream: true,
+              output: streamOutput,
+              usage: streamUsage
+            });
+            resolveTelemetryCompletion?.();
+          },
+          onError: (error) => {
+            storeResponseData(c, {
+              stream: true,
+              output: streamOutput,
+              usage: streamUsage,
+              error: error instanceof Error ? error.message : 'Stream processing error'
+            });
+            resolveTelemetryCompletion?.();
+          }
+        });
+        streamingResponse.headers.set('X-Corvo-Provider', route.provider);
+        streamingResponse.headers.set('X-Corvo-Fallback', route.fallback ? 'true' : 'false');
+        if (route.fallback) {
+          streamingResponse.headers.set('X-Corvo-Fallback-Reason', route.fallback.reason);
+        }
+        return streamingResponse;
+      } catch (streamError) {
+        resolveTelemetryCompletion?.();
+        throw streamError;
       }
-      return streamingResponse;
     }
 
     // Handle non-streaming response
@@ -236,6 +296,9 @@ chatApp.post('/', async (c) => {
 
     // Store response data for telemetry
     storeResponseData(c, openaiResponse);
+    if (openaiResponse.usage) {
+      storeTelemetryUsage(c, openaiResponse.usage);
+    }
 
     // Deduct credits for successful responses if ledger configured
     if (finalBalance.configured && openaiResponse.usage) {
@@ -255,11 +318,13 @@ chatApp.post('/', async (c) => {
     // Record failure in circuit breaker
     await recordCircuitBreakerFailure(c.env, route.provider);
 
-    return c.json({
+    const errorPayload = {
       error: 'Failed to complete request',
       provider: route.provider,
       details: error instanceof Error ? error.message : 'Unknown error'
-    }, 500);
+    };
+    storeResponseData(c, errorPayload);
+    return c.json(errorPayload, 500);
   }
 });
 

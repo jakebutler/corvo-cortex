@@ -1,131 +1,134 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Hono } from 'hono';
-import { telemetryMiddleware, updateTelemetryMetadata, storeResponseData } from '../../../src/middleware/telemetry';
+import {
+  telemetryMiddleware,
+  updateTelemetryMetadata,
+  storeResponseData,
+  storeTelemetryUsage,
+  setTelemetryCompletion
+} from '../../../src/middleware/telemetry';
 import type { Env } from '../../../src/types';
 
-// Mock TelemetryService
 const mockTelemetryService = {
-    createTrace: vi.fn().mockResolvedValue(undefined),
-    logEvent: vi.fn(),
-    estimateCost: vi.fn().mockReturnValue(0.01)
+  createTrace: vi.fn().mockResolvedValue(undefined)
 };
 
 vi.mock('../../../src/services/telemetry', () => ({
-    createTelemetryService: vi.fn(() => mockTelemetryService)
+  createTelemetryService: vi.fn(() => mockTelemetryService)
 }));
 
 describe('Telemetry Middleware', () => {
-    let app: Hono<{ Bindings: Env }>;
-    let mockEnv: Env;
-    let mockExecutionCtx: ExecutionContext;
+  let app: Hono<{ Bindings: Env }>;
+  let mockEnv: Env;
+  let mockExecutionCtx: ExecutionContext;
 
-    beforeEach(() => {
-        app = new Hono<{ Bindings: Env }>();
+  beforeEach(() => {
+    app = new Hono<{ Bindings: Env }>();
 
-        mockEnv = {
-            LANGFUSE_PUBLIC_KEY: 'test',
-            LANGFUSE_SECRET_KEY: 'test'
-        } as Env;
+    mockEnv = {
+      LANGFUSE_PUBLIC_KEY: 'test',
+      LANGFUSE_SECRET_KEY: 'test',
+      ENVIRONMENT: 'test'
+    } as Env;
 
-        mockExecutionCtx = {
-            waitUntil: vi.fn((promise) => promise),
-            passThroughOnException: vi.fn()
-        } as unknown as ExecutionContext;
+    mockExecutionCtx = {
+      waitUntil: vi.fn((promise: Promise<unknown>) => promise),
+      passThroughOnException: vi.fn()
+    } as unknown as ExecutionContext;
 
-        vi.clearAllMocks();
+    vi.clearAllMocks();
+  });
+
+  it('tracks successful requests', async () => {
+    app.use('*', async (c, next) => {
+      c.set('client', { appId: 'test-app' } as never);
+      await next();
     });
 
-    it('should track successful requests', async () => {
-        app.use('*', async (c, next) => {
-            // Mock auth middleware setting client
-            c.set('client', { appId: 'test-app' } as any);
-            await next();
-        });
+    app.use('*', telemetryMiddleware);
 
-        app.use('*', telemetryMiddleware);
-
-        app.post('/test', async (c) => {
-            // Simulate route handler logic
-            updateTelemetryMetadata(c, 'openai', 'gpt-4o', { prompt: 'hello' });
-            storeResponseData(c, { usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } });
-            return c.json({ result: 'ok' });
-        });
-
-        const request = new Request('http://localhost/test', {
-            method: 'POST'
-        });
-
-        const response = await app.fetch(request, mockEnv, mockExecutionCtx);
-
-        expect(response.status).toBe(200);
-
-        // Verify waitUntil was called
-        expect(mockExecutionCtx.waitUntil).toHaveBeenCalled();
-
-        // Verify service calls (might be async inside waitUntil)
-        // Since we mocked waitUntil to execute immediately or return promise, calls should have happened if we awaited fetch?
-        // Actually fetch awaits the handler, but middleware calls waitUntil.
-        // We might need to wait for microtasks.
-        await new Promise(resolve => setTimeout(resolve, 0));
-
-        expect(mockTelemetryService.createTrace).toHaveBeenCalledWith(expect.objectContaining({
-            appId: 'test-app',
-            provider: 'openai',
-            model: 'gpt-4o',
-            usage: {
-                promptTokens: 10,
-                completionTokens: 5,
-                totalTokens: 15
-            }
-        }));
-
-        expect(mockTelemetryService.logEvent).toHaveBeenCalledWith(expect.objectContaining({
-            event: 'llm_request',
-            appId: 'test-app',
-            provider: 'openai',
-            model: 'gpt-4o'
-        }));
+    app.post('/test', async (c) => {
+      updateTelemetryMetadata(c, 'openai-direct', 'gpt-4o', { prompt: 'hello' });
+      storeTelemetryUsage(c, { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 });
+      storeResponseData(c, { ok: true });
+      return c.json({ ok: true });
     });
 
-    it('should ignore failed requests (>= 400)', async () => {
-        app.use('*', async (c, next) => {
-            c.set('client', { appId: 'test-app' } as any);
-            await next();
-        });
+    const response = await app.fetch(new Request('http://localhost/test', { method: 'POST' }), mockEnv, mockExecutionCtx);
+    expect(response.status).toBe(200);
 
-        app.use('*', telemetryMiddleware);
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
-        app.post('/fail', async (c) => {
-            updateTelemetryMetadata(c, 'openai', 'gpt-4o', {});
-            return c.json({ error: 'bad' }, 400);
-        });
+    expect(mockExecutionCtx.waitUntil).toHaveBeenCalledTimes(1);
+    expect(mockTelemetryService.createTrace).toHaveBeenCalledWith(expect.objectContaining({
+      appId: 'test-app',
+      provider: 'openai-direct',
+      model: 'gpt-4o',
+      statusCode: 200,
+      usage: {
+        promptTokens: 10,
+        completionTokens: 5,
+        totalTokens: 15
+      }
+    }));
+  });
 
-        const request = new Request('http://localhost/fail', { method: 'POST' });
-        await app.fetch(request, mockEnv, mockExecutionCtx);
-
-        await new Promise(resolve => setTimeout(resolve, 0));
-
-        // Should NOT track
-        expect(mockExecutionCtx.waitUntil).not.toHaveBeenCalled();
-        expect(mockTelemetryService.createTrace).not.toHaveBeenCalled();
+  it('tracks failed requests', async () => {
+    app.use('*', async (c, next) => {
+      c.set('client', { appId: 'test-app' } as never);
+      await next();
     });
 
-    it('should ignore requests without provider metadata', async () => {
-        app.use('*', async (c, next) => {
-            c.set('client', { appId: 'test-app' } as any);
-            await next();
-        });
+    app.use('*', telemetryMiddleware);
 
-        app.use('*', telemetryMiddleware);
-
-        app.post('/no-meta', async (c) => {
-            // Not calling updateTelemetryMetadata
-            return c.json({ result: 'ok' });
-        });
-
-        const request = new Request('http://localhost/no-meta', { method: 'POST' });
-        await app.fetch(request, mockEnv, mockExecutionCtx);
-
-        expect(mockExecutionCtx.waitUntil).not.toHaveBeenCalled();
+    app.post('/fail', async (c) => {
+      updateTelemetryMetadata(c, 'openai-direct', 'gpt-4o', { prompt: 'hello' });
+      storeResponseData(c, { error: 'bad request' });
+      return c.json({ error: 'bad request' }, 400);
     });
+
+    const response = await app.fetch(new Request('http://localhost/fail', { method: 'POST' }), mockEnv, mockExecutionCtx);
+    expect(response.status).toBe(400);
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(mockExecutionCtx.waitUntil).toHaveBeenCalledTimes(1);
+    expect(mockTelemetryService.createTrace).toHaveBeenCalledWith(expect.objectContaining({
+      statusCode: 400,
+      error: 'bad request'
+    }));
+  });
+
+  it('waits for stream completion promise before tracing', async () => {
+    let resolveCompletion: (() => void) | undefined;
+
+    app.use('*', async (c, next) => {
+      c.set('client', { appId: 'test-app' } as never);
+      await next();
+    });
+
+    app.use('*', telemetryMiddleware);
+
+    app.post('/stream', async (c) => {
+      updateTelemetryMetadata(c, 'openai-direct', 'gpt-4o', { prompt: 'hello' });
+
+      const completion = new Promise<void>((resolve) => {
+        resolveCompletion = resolve;
+      });
+      setTelemetryCompletion(c, completion);
+
+      return c.json({ stream: true });
+    });
+
+    const response = await app.fetch(new Request('http://localhost/stream', { method: 'POST' }), mockEnv, mockExecutionCtx);
+    expect(response.status).toBe(200);
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(mockTelemetryService.createTrace).not.toHaveBeenCalled();
+
+    resolveCompletion?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(mockTelemetryService.createTrace).toHaveBeenCalledTimes(1);
+  });
 });

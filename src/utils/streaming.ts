@@ -46,8 +46,10 @@ interface UsageInfo {
 }
 
 interface StreamingUsageOptions {
-  onUsage?: (usage: UsageInfo) => void;
-  onDone?: () => void;
+  onUsage?: (usage: UsageInfo) => void | Promise<void>;
+  onChunk?: (chunk: string) => void | Promise<void>;
+  onDone?: () => void | Promise<void>;
+  onError?: (error: unknown) => void | Promise<void>;
 }
 
 /**
@@ -65,17 +67,28 @@ export async function createStreamingResponseWithUsage(
   const decoder = new TextDecoder();
   let buffer = '';
   let usageReported = false;
+  let doneNotified = false;
 
   const stream = new ReadableStream({
     async start(controller) {
+      const notifyDone = async () => {
+        if (doneNotified) return;
+        doneNotified = true;
+        await options.onDone?.();
+      };
+
       try {
         while (true) {
           const { done, value } = await reader.read();
-          if (done) break;
+          if (done) {
+            await notifyDone();
+            break;
+          }
 
           if (value) {
             const chunkText = decoder.decode(value, { stream: true });
             buffer += chunkText;
+            await options.onChunk?.(chunkText);
 
             const lines = buffer.split('\n');
             buffer = lines.pop() || '';
@@ -85,7 +98,7 @@ export async function createStreamingResponseWithUsage(
               const data = line.slice(6).trim();
               if (!data || data === '[DONE]') {
                 if (data === '[DONE]') {
-                  options.onDone?.();
+                  await notifyDone();
                 }
                 continue;
               }
@@ -94,7 +107,7 @@ export async function createStreamingResponseWithUsage(
                 const usage = extractUsageFromData(data);
                 if (usage) {
                   usageReported = true;
-                  options.onUsage?.(usage);
+                  await options.onUsage?.(usage);
                 }
               }
             }
@@ -104,6 +117,7 @@ export async function createStreamingResponseWithUsage(
         }
         controller.close();
       } catch (error) {
+        await options.onError?.(error);
         controller.error(error);
       }
     }
