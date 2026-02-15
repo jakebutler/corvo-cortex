@@ -143,4 +143,112 @@ describe('Admin Route - /admin', () => {
             expect(json.results.openai.ok).toBe(true);
         });
     });
+
+    describe('Routing Policy Admin Endpoints', () => {
+        it('should return active environment-scoped routing policy', async () => {
+            const request = new Request('http://localhost/routing-policy', {
+                method: 'GET',
+                headers: { 'Authorization': `Bearer ${ADMIN_API_KEY}` }
+            });
+
+            const response = await adminApp.fetch(request, mockEnv);
+            const json = await response.json() as {
+                key: string;
+                policy: { version: string };
+            };
+
+            expect(response.status).toBe(200);
+            expect(json.key).toBe('routing:kinisi-hints:test');
+            expect(json.policy.version).toBeDefined();
+        });
+
+        it('should reject invalid routing policy payloads', async () => {
+            const request = new Request('http://localhost/routing-policy', {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${ADMIN_API_KEY}`,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    policy: {
+                        version: 123,
+                        matrix: null
+                    }
+                })
+            });
+
+            const response = await adminApp.fetch(request, mockEnv);
+
+            expect(response.status).toBe(400);
+            const json = await response.json() as { error: string };
+            expect(json.error).toContain('Invalid routing policy payload');
+        });
+
+        it('should persist valid routing policy payloads', async () => {
+            const policy = {
+                version: 'override-v2',
+                enabled: true,
+                modelProfiles: {
+                    fast_json_model: 'accounts/fireworks/models/override-fast',
+                    balanced_json_model: 'openai/gpt-5-mini',
+                    quality_json_model: 'openai/gpt-5',
+                    safe_json_model: 'openai/gpt-5-mini'
+                },
+                matrix: {
+                    week_1: {
+                        speed: [{ provider: 'fireworks', modelProfile: 'fast_json_model' }],
+                        balanced: [{ provider: 'openrouter', modelProfile: 'balanced_json_model' }],
+                        quality: [{ provider: 'openrouter', modelProfile: 'quality_json_model' }]
+                    },
+                    week_n: {
+                        speed: [{ provider: 'fireworks', modelProfile: 'fast_json_model' }],
+                        balanced: [{ provider: 'openrouter', modelProfile: 'balanced_json_model' }],
+                        quality: [{ provider: 'openrouter', modelProfile: 'quality_json_model' }]
+                    },
+                    refine_week_1: {
+                        speed: [{ provider: 'openrouter', modelProfile: 'balanced_json_model' }],
+                        balanced: [{ provider: 'openrouter', modelProfile: 'balanced_json_model' }],
+                        quality: [{ provider: 'openrouter', modelProfile: 'quality_json_model' }]
+                    }
+                },
+                hedge: {
+                    week_n_speed: true,
+                    week_1_speed: false,
+                    delayMs: 250
+                },
+                retryPolicies: {
+                    speed: { maxRetries: 1, baseDelayMs: 50, maxDelayMs: 250 },
+                    balanced: { maxRetries: 2, baseDelayMs: 80, maxDelayMs: 1000 },
+                    quality: { maxRetries: 2, baseDelayMs: 100, maxDelayMs: 1500 }
+                },
+                latencyBudgetsMs: {
+                    week_1: 45000,
+                    week_n: 8000,
+                    refine_week_1: 30000
+                }
+            };
+
+            const postRequest = new Request('http://localhost/routing-policy', {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${ADMIN_API_KEY}`,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ policy })
+            });
+
+            const postResponse = await adminApp.fetch(postRequest, mockEnv);
+            expect(postResponse.status).toBe(200);
+
+            const getRequest = new Request('http://localhost/routing-policy', {
+                method: 'GET',
+                headers: { 'Authorization': `Bearer ${ADMIN_API_KEY}` }
+            });
+            const getResponse = await adminApp.fetch(getRequest, mockEnv);
+            const json = await getResponse.json() as { policy: { version: string } };
+
+            expect(getResponse.status).toBe(200);
+            expect(json.policy.version).toBe('override-v2');
+        });
+    });
 });

@@ -4,6 +4,8 @@ import { adminAuthMiddleware } from '../middleware/auth';
 import { getCreditBalance, setCreditBalance, adjustCreditBalance } from '../services/credits';
 import { getProviderPricing, ProviderPricing } from '../services/pricing';
 import { refreshAllModelCatalogs, ModelProvider } from '../services/models-catalog';
+import { getRoutingPolicy, getRoutingPolicyConfigKey } from '../services/routing-policy';
+import { routingPolicySchema } from '../schemas/routing-policy';
 
 const adminApp = new Hono<{ Bindings: Env }>();
 
@@ -174,6 +176,40 @@ adminApp.post('/models/refresh', async (c) => {
 
   const results = await refreshAllModelCatalogs(c.env, providers);
   return c.json({ results });
+});
+
+/**
+ * GET /admin/routing-policy
+ * Read the active environment-scoped routing policy used for header-driven routing.
+ */
+adminApp.get('/routing-policy', async (c) => {
+  const key = getRoutingPolicyConfigKey(c.env);
+  const policy = await getRoutingPolicy(c.env);
+  return c.json({ key, policy });
+});
+
+/**
+ * POST /admin/routing-policy
+ * Replace the environment-scoped routing policy.
+ */
+adminApp.post('/routing-policy', async (c) => {
+  const body = await c.req.json().catch(() => ({})) as { policy?: unknown } | unknown;
+  const policyCandidate = (body && typeof body === 'object' && 'policy' in body)
+    ? (body as { policy?: unknown }).policy
+    : body;
+
+  const validation = routingPolicySchema.safeParse(policyCandidate);
+  if (!validation.success) {
+    return c.json({
+      error: 'Invalid routing policy payload',
+      details: validation.error.errors
+    }, 400);
+  }
+
+  const key = getRoutingPolicyConfigKey(c.env);
+  await c.env.CORTEX_CONFIG.put(key, JSON.stringify(validation.data));
+
+  return c.json({ key, policy: validation.data });
 });
 
 export default adminApp;

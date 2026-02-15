@@ -15,6 +15,26 @@ export interface ClientConfig {
   };
 }
 
+export type RoutingStage = 'week_1' | 'week_n' | 'refine_week_1';
+export type RoutingStrategy = 'speed' | 'balanced' | 'quality';
+export type RoutingProvider = 'fireworks' | 'openrouter';
+export type RequestPriority = 'low' | 'normal' | 'high';
+export type RequestRole = 'primary' | 'hedge' | 'fallback';
+
+export interface KinisiRoutingHints {
+  enabled: boolean;
+  stage: RoutingStage;
+  strategy: RoutingStrategy;
+  providerPrefer: RoutingProvider[];
+  providerPreferExplicit?: boolean;
+  providerAllow?: RoutingProvider[];
+  providerBlock?: RoutingProvider[];
+  requestPriority: RequestPriority;
+  maxLatencyMs?: number;
+  requestRole: RequestRole;
+  requestedModel?: string;
+}
+
 // Rate limit usage tracking
 export interface RateLimitUsage {
   requests: number;
@@ -98,6 +118,7 @@ export interface Variables {
     input: unknown;
     completion?: Promise<void>;
     deferCompletion?: boolean;
+    metadata?: Record<string, unknown>;
   };
   telemetryUsage?: {
     prompt_tokens?: number;

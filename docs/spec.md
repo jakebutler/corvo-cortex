@@ -175,6 +175,43 @@ Authorization: Bearer sk-corvo-{app}-{random}
 | GET | `/v1/models` | Required | List available models and defaults |
 | POST | `/v1/chat/completions` | Required | Chat completion with smart routing |
 
+#### Header-Driven Routing Hints (`POST /v1/chat/completions`)
+
+Corvo Cortex supports optional routing hints via request headers:
+
+- `x-kinisi-llm-stage`: `week_1 | week_n | refine_week_1`
+- `x-kinisi-routing-strategy`: `speed | balanced | quality`
+- `x-kinisi-provider-prefer`: CSV provider priority
+- `x-kinisi-provider-allow`: CSV allowlist
+- `x-kinisi-provider-block`: CSV denylist
+- `x-kinisi-request-priority`: `low | normal | high`
+- `x-kinisi-max-latency-ms`: end-to-end budget from caller
+- `x-kinisi-request-role`: `primary | hedge | fallback`
+- `x-kinisi-model`: requested model override
+
+Rules:
+
+- If no `x-kinisi-*` headers are sent, legacy routing behavior is unchanged.
+- Invalid header values are treated as missing and resolved to defaults.
+- `x-kinisi-model` overrides request body `model`.
+- `stream=true` with strict `response_format.json_schema` is rejected with `400`.
+- If strict schema validation fails on all routes, Corvo Cortex returns `422` with `error.class = schema_invalid`.
+
+#### Response Metadata Headers
+
+Corvo Cortex always returns these headers on success and error:
+
+- `x-corvo-cortex-provider`
+- `x-corvo-cortex-model`
+- `x-corvo-cortex-route-id`
+- `x-corvo-cortex-fallback-used`
+- `x-corvo-cortex-hedge-used`
+- `x-corvo-cortex-cache-hit`
+- `x-corvo-cortex-ttft-ms`
+- `x-corvo-cortex-latency-ms`
+
+When unavailable, values are set to `unknown` instead of omitted.
+
 ### Admin Endpoints
 
 | Method | Path | Auth | Description |
@@ -287,6 +324,7 @@ Client Request
 ## Related Documentation
 
 - [Provider Routing](./features/provider-routing.md)
+- [Header Routing Client Integration](./features/header-routing-client-integration.md)
 - [Authentication](./features/authentication.md)
 - [Rate Limiting](./features/rate-limiting.md)
 - [Circuit Breaker](./features/circuit-breaker.md)

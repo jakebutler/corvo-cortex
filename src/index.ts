@@ -27,8 +27,31 @@ app.use('*', cors({
     return allowed.includes(origin || '') ? origin : null;
   },
   allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowHeaders: ['Authorization', 'Content-Type', 'X-Request-ID'],
-  exposeHeaders: ['X-Request-ID'],
+  allowHeaders: [
+    'Authorization',
+    'Content-Type',
+    'X-Request-ID',
+    'x-kinisi-llm-stage',
+    'x-kinisi-routing-strategy',
+    'x-kinisi-provider-prefer',
+    'x-kinisi-provider-allow',
+    'x-kinisi-provider-block',
+    'x-kinisi-request-priority',
+    'x-kinisi-max-latency-ms',
+    'x-kinisi-request-role',
+    'x-kinisi-model'
+  ],
+  exposeHeaders: [
+    'X-Request-ID',
+    'x-corvo-cortex-provider',
+    'x-corvo-cortex-model',
+    'x-corvo-cortex-route-id',
+    'x-corvo-cortex-fallback-used',
+    'x-corvo-cortex-hedge-used',
+    'x-corvo-cortex-cache-hit',
+    'x-corvo-cortex-ttft-ms',
+    'x-corvo-cortex-latency-ms'
+  ],
   maxAge: 86400,
 }));
 
@@ -47,7 +70,7 @@ app.route('/analytics', analyticsRoutes);
 
 export default {
   fetch: app.fetch,
-  async scheduled(_event: ScheduledEvent, env: Env, _ctx: ExecutionContext) {
+  async scheduled(_event: unknown, env: Env, _ctx: unknown) {
     try {
       await refreshAllModelCatalogs(env);
     } catch (error) {

@@ -312,4 +312,117 @@ describe('Chat Route - /v1/chat/completions', () => {
             expect(json.provider).toBeDefined();
         });
     });
+
+    describe('Header-Driven Routing', () => {
+        it('routes by x-kinisi headers and emits x-corvo-cortex metadata headers', async () => {
+            const request = new Request('http://localhost/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${TEST_API_KEY}`,
+                    'x-kinisi-llm-stage': 'week_n',
+                    'x-kinisi-routing-strategy': 'speed',
+                    'x-kinisi-provider-prefer': 'openrouter,fireworks',
+                    'x-kinisi-model': 'gpt-5-mini'
+                },
+                body: JSON.stringify({
+                    messages: [{ role: 'user', content: 'Generate week plan JSON' }]
+                })
+            });
+
+            const response = await chatApp.fetch(request, mockEnv, mockExecutionCtx);
+
+            expect(response.status).toBe(200);
+            expect(globalThis.fetch).toHaveBeenCalledWith(
+                expect.stringContaining('openrouter.ai'),
+                expect.any(Object)
+            );
+            expect(response.headers.get('x-corvo-cortex-provider')).toBe('openrouter');
+            expect(response.headers.get('x-corvo-cortex-model')).toBe('gpt-5-mini');
+            expect(response.headers.get('x-corvo-cortex-route-id')).not.toBe('unknown');
+            expect(response.headers.get('x-corvo-cortex-fallback-used')).toBe('false');
+            expect(response.headers.get('x-corvo-cortex-hedge-used')).toBe('false');
+        });
+
+        it('rejects stream=true when strict response_format.json_schema is requested', async () => {
+            const request = new Request('http://localhost/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${TEST_API_KEY}`,
+                    'x-kinisi-llm-stage': 'week_1'
+                },
+                body: JSON.stringify({
+                    model: 'gpt-5-mini',
+                    stream: true,
+                    messages: [{ role: 'user', content: 'Generate week plan JSON' }],
+                    response_format: {
+                        type: 'json_schema',
+                        json_schema: {
+                            name: 'week_blueprint',
+                            schema: {
+                                type: 'object',
+                                required: ['weeks'],
+                                properties: {
+                                    weeks: { type: 'array' }
+                                }
+                            }
+                        }
+                    }
+                })
+            });
+
+            const response = await chatApp.fetch(request, mockEnv, mockExecutionCtx);
+            const json = await response.json() as { error: { class: string } };
+
+            expect(response.status).toBe(400);
+            expect(json.error.class).toBe('invalid_request');
+            expect(response.headers.get('x-corvo-cortex-provider')).toBe('unknown');
+            expect(response.headers.get('x-corvo-cortex-latency-ms')).not.toBe('unknown');
+        });
+
+        it('returns 422 schema_invalid and deterministic metadata when all strict-schema candidates fail', async () => {
+            const request = new Request('http://localhost/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${TEST_API_KEY}`,
+                    'x-kinisi-llm-stage': 'week_n',
+                    'x-kinisi-routing-strategy': 'speed',
+                    'x-kinisi-provider-allow': 'openrouter'
+                },
+                body: JSON.stringify({
+                    model: 'gpt-5-mini',
+                    messages: [{ role: 'user', content: 'Generate week plan JSON' }],
+                    response_format: {
+                        type: 'json_schema',
+                        json_schema: {
+                            name: 'week_blueprint',
+                            schema: {
+                                type: 'object',
+                                required: ['weeks'],
+                                properties: {
+                                    weeks: { type: 'array', minItems: 1 }
+                                }
+                            }
+                        }
+                    }
+                })
+            });
+
+            const response = await chatApp.fetch(request, mockEnv, mockExecutionCtx);
+            const json = await response.json() as {
+                error: { class: string; reason_codes: string[]; route_id: string };
+            };
+
+            expect(response.status).toBe(422);
+            expect(json.error.class).toBe('schema_invalid');
+            expect(json.error.reason_codes).toContain('schema_invalid');
+            expect(json.error.route_id).toBeDefined();
+            expect(response.headers.get('x-corvo-cortex-route-id')).toBe(json.error.route_id);
+            expect(response.headers.get('x-corvo-cortex-provider')).toBe('unknown');
+            expect(response.headers.get('x-corvo-cortex-fallback-used')).toBe('true');
+            expect(response.headers.get('x-corvo-cortex-cache-hit')).toBe('unknown');
+        });
+    });
 });

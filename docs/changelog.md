@@ -8,7 +8,17 @@ This changelog follows [Keep a Changelog](https://keepachangelog.com/) format an
 
 ## [Unreleased]
 
+### Added
+- Header-driven routing hints on `POST /v1/chat/completions` via `x-kinisi-*` headers.
+- Stage/strategy-aware route planning with bounded fallback chains and optional delayed hedging (`week_n + speed + primary`).
+- Strict caller-schema enforcement for `response_format.json_schema` outputs with terminal `422 schema_invalid` behavior.
+- Deterministic `x-corvo-cortex-*` response metadata headers on both success and error.
+
 ### Changed
+- `POST /v1/chat/completions` now supports opt-in policy-based routing without changing legacy behavior when hints are absent.
+- Telemetry metadata now captures routing dimensions (`stage`, `strategy`, `route_id`, fallback/hedge flags).
+- CORS allow/expose headers now include `x-kinisi-*` request headers and `x-corvo-cortex-*` response headers.
+
 - Telemetry transport switched from Langfuse JS SDK event flushing to direct Langfuse ingestion API calls in Workers runtime.
 - Telemetry now captures both successful and failed requests with full prompt/response payloads.
 - Streaming telemetry now waits for stream completion before final trace ingestion.

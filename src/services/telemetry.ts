@@ -167,8 +167,9 @@ export class TelemetryService {
 }
 
 function createId(): string {
-  if (globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function') {
-    return globalThis.crypto.randomUUID();
+  const webCrypto = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
+  if (webCrypto && typeof webCrypto.randomUUID === 'function') {
+    return webCrypto.randomUUID();
   }
   return `${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
 }
