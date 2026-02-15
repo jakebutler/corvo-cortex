@@ -69,6 +69,7 @@ export interface Env {
   OPENAI_API_KEY: string;
   ZAI_API_KEY: string;
   OPENROUTER_API_KEY: string;
+  OPENROUTER_PROVISIONING_API_KEY?: string;
   MINIMAX_API_KEY: string;
   FIREWORKS_API_KEY: string;
 

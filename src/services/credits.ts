@@ -8,6 +8,16 @@ export interface CreditBalance {
   configured: boolean;
 }
 
+export interface OpenRouterCreditSnapshot {
+  totalCredits: number;
+  totalUsage: number;
+  remainingCredits: number;
+  syncedAt: string;
+}
+
+const OPENROUTER_CREDITS_CACHE_KEY = 'credits:openrouter:snapshot';
+const OPENROUTER_CREDITS_SYNC_TTL_MS = 60_000;
+
 export async function getCreditBalance(env: Env, provider: LLMProvider): Promise<CreditBalance> {
   if (!env.CREDIT_LEDGER) {
     return {
@@ -62,4 +72,100 @@ export async function deductCredits(env: Env, provider: LLMProvider, cost: numbe
 
   const balance = await response.json() as CreditBalance;
   return { ok: true, balance };
+}
+
+export async function markProviderCreditsExhausted(env: Env, provider: LLMProvider): Promise<void> {
+  try {
+    await setCreditBalance(env, provider, 0, 'USD');
+  } catch {
+    // Best-effort only; routing can still fallback on live upstream errors.
+  }
+}
+
+export function isCreditExhaustionResponse(status: number, errorText: string): boolean {
+  if (status === 402) {
+    return true;
+  }
+
+  if (status !== 400 && status !== 403 && status !== 429) {
+    return false;
+  }
+
+  const normalized = errorText.toLowerCase();
+  return normalized.includes('insufficient credit')
+    || normalized.includes('insufficient funds')
+    || normalized.includes('credit balance')
+    || normalized.includes('quota')
+    || normalized.includes('billing')
+    || normalized.includes('payment required');
+}
+
+export async function syncOpenRouterCreditsIfStale(env: Env): Promise<OpenRouterCreditSnapshot | null> {
+  const cachedRaw = await env.CORTEX_CONFIG.get(OPENROUTER_CREDITS_CACHE_KEY, { type: 'json' }) as
+    | { syncedAt?: string; totalCredits?: number; totalUsage?: number; remainingCredits?: number }
+    | null;
+  const syncedAtMs = cachedRaw?.syncedAt ? Date.parse(cachedRaw.syncedAt) : Number.NaN;
+
+  if (Number.isFinite(syncedAtMs) && (Date.now() - syncedAtMs) < OPENROUTER_CREDITS_SYNC_TTL_MS) {
+    return {
+      totalCredits: cachedRaw?.totalCredits ?? 0,
+      totalUsage: cachedRaw?.totalUsage ?? 0,
+      remainingCredits: cachedRaw?.remainingCredits ?? 0,
+      syncedAt: cachedRaw?.syncedAt || new Date().toISOString()
+    };
+  }
+
+  return await syncOpenRouterCredits(env);
+}
+
+export async function syncOpenRouterCredits(env: Env): Promise<OpenRouterCreditSnapshot | null> {
+  const provisioningKey = env.OPENROUTER_PROVISIONING_API_KEY || env.OPENROUTER_API_KEY;
+  if (!provisioningKey) {
+    return null;
+  }
+
+  let response: Response;
+  try {
+    response = await fetch('https://openrouter.ai/api/v1/credits', {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${provisioningKey}`
+      }
+    });
+  } catch {
+    return null;
+  }
+
+  if (!response.ok) {
+    return null;
+  }
+
+  const payload = await response.json() as {
+    data?: { total_credits?: number; total_usage?: number };
+  };
+
+  const totalCredits = Number(payload?.data?.total_credits ?? 0);
+  const totalUsage = Number(payload?.data?.total_usage ?? 0);
+  if (!Number.isFinite(totalCredits) || !Number.isFinite(totalUsage)) {
+    return null;
+  }
+
+  const remainingCredits = Math.max(totalCredits - totalUsage, 0);
+  const syncedAt = new Date().toISOString();
+
+  try {
+    await setCreditBalance(env, 'openrouter', remainingCredits, 'credits');
+  } catch {
+    // If ledger write fails, still persist snapshot for observability.
+  }
+
+  const snapshot: OpenRouterCreditSnapshot = {
+    totalCredits,
+    totalUsage,
+    remainingCredits,
+    syncedAt
+  };
+
+  await env.CORTEX_CONFIG.put(OPENROUTER_CREDITS_CACHE_KEY, JSON.stringify(snapshot));
+  return snapshot;
 }

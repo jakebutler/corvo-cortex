@@ -9,6 +9,7 @@ Smart routing system that directs LLM requests to the optimal provider.
 The router (`src/services/router.ts`) determines which LLM provider handles each request based on:
 - Requested model name
 - Available credits (environment flags)
+- Credit ledger balances (including live OpenRouter sync)
 - Client fallback strategy configuration
 - Optional header-driven hints (`x-kinisi-*`) on `POST /v1/chat/completions`
 
@@ -63,6 +64,12 @@ CREDITS_MINIMAX = "true"
 ```
 
 When a credit flag is `"true"`, requests for that provider's models use direct API. Otherwise, they fall back.
+
+In addition, Corvo tracks credits via the Durable Object credit ledger:
+- OpenRouter credits are refreshed from `GET https://openrouter.ai/api/v1/credits` and cached briefly.
+- If a direct provider returns a credit-exhaustion response (for example `402`), Corvo marks that provider as exhausted and retries through OpenRouter once when client fallback strategy is `openrouter`.
+
+Use `POST /admin/credits/sync` to force an OpenRouter credit refresh.
 
 ---
 

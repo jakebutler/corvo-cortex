@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { Hono } from 'hono';
 import chatApp from '../../../src/routes/chat';
-import { createMockKV, createMockClientConfig, createMockCircuitBreaker, TEST_API_KEY } from '../../mocks/env';
+import { createMockKV, createMockClientConfig, createMockCircuitBreaker, createMockCreditLedger, TEST_API_KEY } from '../../mocks/env';
 import type { Env, Variables } from '../../../src/types';
 
 // Mock the fetch function for provider calls
@@ -23,6 +23,7 @@ describe('Chat Route - /v1/chat/completions', () => {
             LANGFUSE_PUBLIC_KEY: 'test-langfuse-public',
             LANGFUSE_SECRET_KEY: 'test-langfuse-secret',
             CIRCUIT_BREAKER: createMockCircuitBreaker(),
+            CREDIT_LEDGER: createMockCreditLedger(),
             ENVIRONMENT: 'test',
             CREDITS_OPENAI: 'true', // Enable direct OpenAI credits for testing
             ...overrides
@@ -39,6 +40,15 @@ describe('Chat Route - /v1/chat/completions', () => {
 
         // Mock fetch for provider calls
         globalThis.fetch = vi.fn().mockImplementation(async (url: string) => {
+            if (url.includes('/api/v1/credits')) {
+                return new Response(JSON.stringify({
+                    data: {
+                        total_credits: 100,
+                        total_usage: 12
+                    }
+                }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+            }
+
             // Mock successful OpenAI response
             if (url.includes('openai.com')) {
                 return new Response(JSON.stringify({
@@ -279,6 +289,87 @@ describe('Chat Route - /v1/chat/completions', () => {
             expect(response.status).toBe(402);
             const json = await response.json() as { error: string };
             expect(json.error).toBe('Payment Required');
+        });
+
+        it('should retry through OpenRouter when Anthropic responds with credit exhaustion', async () => {
+            const anthropicCreditError = {
+                ...createMockEnv({
+                    CREDITS_ANTHROPIC: 'true',
+                    CREDITS_OPENAI: undefined
+                })
+            };
+
+            globalThis.fetch = vi.fn().mockImplementation(async (url: string) => {
+                if (url.includes('/api/v1/credits')) {
+                    return new Response(JSON.stringify({
+                        data: { total_credits: 100, total_usage: 12 }
+                    }), {
+                        status: 200,
+                        headers: { 'Content-Type': 'application/json' }
+                    });
+                }
+
+                if (url.includes('anthropic.com')) {
+                    return new Response(JSON.stringify({
+                        error: {
+                            type: 'insufficient_credits',
+                            message: 'Insufficient credits'
+                        }
+                    }), {
+                        status: 402,
+                        headers: { 'Content-Type': 'application/json' }
+                    });
+                }
+
+                if (url.includes('openrouter.ai')) {
+                    return new Response(JSON.stringify({
+                        id: 'chatcmpl-router',
+                        object: 'chat.completion',
+                        created: Math.floor(Date.now() / 1000),
+                        model: 'claude-3-5-sonnet',
+                        choices: [{
+                            index: 0,
+                            message: { role: 'assistant', content: 'Fallback success' },
+                            finish_reason: 'stop'
+                        }],
+                        usage: {
+                            prompt_tokens: 10,
+                            completion_tokens: 5,
+                            total_tokens: 15
+                        }
+                    }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+                }
+
+                return new Response('Not found', { status: 404 });
+            });
+
+            const request = new Request('http://localhost/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${TEST_API_KEY}`
+                },
+                body: JSON.stringify({
+                    model: 'claude-3-5-sonnet',
+                    messages: [{ role: 'user', content: 'Hello' }]
+                })
+            });
+
+            const response = await chatApp.fetch(request, anthropicCreditError, mockExecutionCtx);
+            const json = await response.json() as { choices: Array<{ message: { content: string } }> };
+
+            expect(response.status).toBe(200);
+            expect(json.choices[0].message.content).toBe('Fallback success');
+            expect(globalThis.fetch).toHaveBeenCalledWith(
+                expect.stringContaining('anthropic.com'),
+                expect.any(Object)
+            );
+            expect(globalThis.fetch).toHaveBeenCalledWith(
+                expect.stringContaining('openrouter.ai/api/v1/chat/completions'),
+                expect.any(Object)
+            );
+            expect(response.headers.get('x-corvo-cortex-provider')).toBe('openrouter');
+            expect(response.headers.get('x-corvo-cortex-fallback-used')).toBe('true');
         });
     });
 

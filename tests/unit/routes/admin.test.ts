@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { Hono } from 'hono';
 import { vi } from 'vitest';
 import adminApp from '../../../src/routes/admin';
-import { createMockKV, createMockClientConfig, TEST_API_KEY, ADMIN_API_KEY } from '../../mocks/env';
+import { createMockKV, createMockClientConfig, createMockCreditLedger, TEST_API_KEY, ADMIN_API_KEY } from '../../mocks/env';
 import type { Env, RateLimitUsage } from '../../../src/types';
 
 vi.mock('../../../src/services/models-catalog', () => ({
@@ -34,7 +34,7 @@ describe('Admin Route - /admin', () => {
             LANGFUSE_PUBLIC_KEY: 'test',
             LANGFUSE_SECRET_KEY: 'test',
             CIRCUIT_BREAKER: {} as unknown as DurableObjectNamespace,
-            CREDIT_LEDGER: {} as unknown as DurableObjectNamespace,
+            CREDIT_LEDGER: createMockCreditLedger(),
             ENVIRONMENT: 'test',
             ...overrides
         } as Env;
@@ -141,6 +141,48 @@ describe('Admin Route - /admin', () => {
             expect(response.status).toBe(200);
             const json = await response.json() as { results: { openai: { ok: boolean; count: number } } };
             expect(json.results.openai.ok).toBe(true);
+        });
+    });
+
+    describe('POST /credits/sync', () => {
+        const originalFetch = globalThis.fetch;
+
+        beforeEach(() => {
+            globalThis.fetch = vi.fn().mockResolvedValue(
+                new Response(JSON.stringify({
+                    data: {
+                        total_credits: 100,
+                        total_usage: 12
+                    }
+                }), {
+                    status: 200,
+                    headers: { 'Content-Type': 'application/json' }
+                })
+            );
+        });
+
+        it('syncs openrouter credits and returns snapshot + ledger balance', async () => {
+            const request = new Request('http://localhost/credits/sync', {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${ADMIN_API_KEY}` },
+                body: JSON.stringify({ provider: 'openrouter' })
+            });
+
+            const response = await adminApp.fetch(request, mockEnv);
+            const json = await response.json() as {
+                provider: string;
+                snapshot: { remainingCredits: number };
+                balance: { balance: number };
+            };
+
+            expect(response.status).toBe(200);
+            expect(json.provider).toBe('openrouter');
+            expect(json.snapshot.remainingCredits).toBe(88);
+            expect(json.balance.balance).toBe(88);
+        });
+
+        afterEach(() => {
+            globalThis.fetch = originalFetch;
         });
     });
 

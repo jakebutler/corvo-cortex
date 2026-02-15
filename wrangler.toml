@@ -50,6 +50,7 @@ crons = ["0 0 * * *"]
 # OPENAI_API_KEY
 # ZAI_API_KEY
 # OPENROUTER_API_KEY
+# OPENROUTER_PROVISIONING_API_KEY (recommended for /api/v1/credits)
 # LANGFUSE_PUBLIC_KEY
 # LANGFUSE_SECRET_KEY
 # LANGFUSE_BASE_URL is a non-secret var (set in [vars])

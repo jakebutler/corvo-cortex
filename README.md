@@ -11,6 +11,7 @@
 Corvo Cortex is a serverless AI Gateway built on Cloudflare Workers that decouples frontend applications from specific LLM providers. It provides:
 
 - **Smart Provider Routing** - Intelligently routes to prioritize free credits (OpenAI, Anthropic, Z.ai)
+- **Credit-Aware Fallback** - Automatically retries via OpenRouter when direct provider credits are exhausted
 - **Authentication** - App-specific API keys stored in Cloudflare KV
 - **Rate Limiting** - Per-client quotas (requests/minute, tokens/minute)
 - **Circuit Breaker** - Prevents cascading failures with auto-recovery
@@ -184,6 +185,7 @@ wrangler secret put ANTHROPIC_API_KEY --env production
 wrangler secret put OPENAI_API_KEY --env production
 wrangler secret put ZAI_API_KEY --env production
 wrangler secret put OPENROUTER_API_KEY --env production
+wrangler secret put OPENROUTER_PROVISIONING_API_KEY --env production
 wrangler secret put LANGFUSE_PUBLIC_KEY --env production
 wrangler secret put LANGFUSE_SECRET_KEY --env production
 

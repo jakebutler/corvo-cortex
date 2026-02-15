@@ -1,7 +1,12 @@
 import { Hono } from 'hono';
 import type { Env, RateLimitUsage, LLMProvider } from '../types';
 import { adminAuthMiddleware } from '../middleware/auth';
-import { getCreditBalance, setCreditBalance, adjustCreditBalance } from '../services/credits';
+import {
+  adjustCreditBalance,
+  getCreditBalance,
+  setCreditBalance,
+  syncOpenRouterCredits
+} from '../services/credits';
 import { getProviderPricing, ProviderPricing } from '../services/pricing';
 import { refreshAllModelCatalogs, ModelProvider } from '../services/models-catalog';
 import { getRoutingPolicy, getRoutingPolicyConfigKey } from '../services/routing-policy';
@@ -130,6 +135,31 @@ adminApp.post('/credits/adjust', async (c) => {
 
   const balance = await adjustCreditBalance(c.env, body.provider, body.delta, body.currency);
   return c.json({ provider: body.provider, ...balance });
+});
+
+/**
+ * POST /admin/credits/sync
+ * Force refresh OpenRouter credit snapshot and ledger balance.
+ */
+adminApp.post('/credits/sync', async (c) => {
+  const body = await c.req.json().catch(() => ({})) as { provider?: LLMProvider };
+  const provider = body.provider || 'openrouter';
+
+  if (provider !== 'openrouter') {
+    return c.json({ error: 'Only openrouter sync is supported currently' }, 400);
+  }
+
+  const snapshot = await syncOpenRouterCredits(c.env);
+  if (!snapshot) {
+    return c.json({ error: 'Failed to sync OpenRouter credits' }, 502);
+  }
+
+  const balance = await getCreditBalance(c.env, 'openrouter');
+  return c.json({
+    provider: 'openrouter',
+    snapshot,
+    balance
+  });
 });
 
 /**

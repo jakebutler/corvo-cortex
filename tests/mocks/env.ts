@@ -102,20 +102,33 @@ export function createMockCircuitBreaker(): DurableObjectNamespace {
  * Mock Credit Ledger Durable Object
  */
 export function createMockCreditLedger(): DurableObjectNamespace {
-    let balance = 0;
-    let currency: 'USD' | 'credits' = 'USD';
-    let configured = false;
+    type LedgerState = {
+        balance: number;
+        currency: 'USD' | 'credits';
+        configured: boolean;
+    };
 
-    const mockStub = {
+    const stateById = new Map<string, LedgerState>();
+    const getState = (id: string): LedgerState => {
+        const existing = stateById.get(id);
+        if (existing) return existing;
+
+        const initial: LedgerState = { balance: 0, currency: 'USD', configured: false };
+        stateById.set(id, initial);
+        return initial;
+    };
+
+    const createStub = (id: string) => ({
         fetch: async (request: Request) => {
             const url = new URL(request.url);
             const path = url.pathname;
+            const current = getState(id);
 
             if (path === '/balance') {
                 return new Response(JSON.stringify({
-                    balance,
-                    currency,
-                    configured,
+                    balance: current.balance,
+                    currency: current.currency,
+                    configured: current.configured,
                     lastUpdated: new Date().toISOString()
                 }), {
                     status: 200,
@@ -124,13 +137,13 @@ export function createMockCreditLedger(): DurableObjectNamespace {
             }
             if (path === '/set') {
                 const body = await request.json() as { balance?: number; currency?: 'USD' | 'credits' };
-                balance = body.balance ?? balance;
-                currency = body.currency ?? currency;
-                configured = true;
+                current.balance = body.balance ?? current.balance;
+                current.currency = body.currency ?? current.currency;
+                current.configured = true;
                 return new Response(JSON.stringify({
-                    balance,
-                    currency,
-                    configured,
+                    balance: current.balance,
+                    currency: current.currency,
+                    configured: current.configured,
                     lastUpdated: new Date().toISOString()
                 }), {
                     status: 200,
@@ -139,13 +152,13 @@ export function createMockCreditLedger(): DurableObjectNamespace {
             }
             if (path === '/adjust') {
                 const body = await request.json() as { delta?: number; currency?: 'USD' | 'credits' };
-                balance += body.delta ?? 0;
-                currency = body.currency ?? currency;
-                configured = true;
+                current.balance += body.delta ?? 0;
+                current.currency = body.currency ?? current.currency;
+                current.configured = true;
                 return new Response(JSON.stringify({
-                    balance,
-                    currency,
-                    configured,
+                    balance: current.balance,
+                    currency: current.currency,
+                    configured: current.configured,
                     lastUpdated: new Date().toISOString()
                 }), {
                     status: 200,
@@ -155,18 +168,18 @@ export function createMockCreditLedger(): DurableObjectNamespace {
             if (path === '/deduct') {
                 const body = await request.json() as { cost?: number };
                 const cost = body.cost ?? 0;
-                if (balance < cost) {
+                if (current.balance < cost) {
                     return new Response(JSON.stringify({ error: 'Insufficient credits' }), {
                         status: 402,
                         headers: { 'Content-Type': 'application/json' }
                     });
                 }
-                balance -= cost;
-                configured = true;
+                current.balance -= cost;
+                current.configured = true;
                 return new Response(JSON.stringify({
-                    balance,
-                    currency,
-                    configured,
+                    balance: current.balance,
+                    currency: current.currency,
+                    configured: current.configured,
                     lastUpdated: new Date().toISOString()
                 }), {
                     status: 200,
@@ -175,11 +188,11 @@ export function createMockCreditLedger(): DurableObjectNamespace {
             }
             return new Response('Not found', { status: 404 });
         }
-    };
+    });
 
     return {
-        get: () => mockStub,
-        idFromName: () => ({ toString: () => 'mock-id' }),
+        get: (id: { toString: () => string }) => createStub(id.toString()),
+        idFromName: (name: string) => ({ toString: () => name }),
         idFromString: () => ({ toString: () => 'mock-id' }),
         newUniqueId: () => ({ toString: () => 'mock-id' })
     } as unknown as DurableObjectNamespace;

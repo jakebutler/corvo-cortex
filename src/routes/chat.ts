@@ -12,7 +12,13 @@ import {
 } from '../middleware/telemetry';
 import { determineProvider } from '../services/router';
 import { estimateCostFromUsage } from '../services/pricing';
-import { getCreditBalance, deductCredits } from '../services/credits';
+import {
+  deductCredits,
+  getCreditBalance,
+  isCreditExhaustionResponse,
+  markProviderCreditsExhausted,
+  syncOpenRouterCreditsIfStale
+} from '../services/credits';
 import { getAdapterForProvider } from '../utils/transform';
 import { createStreamingResponseWithUsage } from '../utils/streaming';
 import { fetchWithRetry } from '../utils/retry';
@@ -153,6 +159,7 @@ chatApp.post('/', async (c) => {
   }
 
   const body = validationResult.data;
+  await syncOpenRouterCreditsIfStale(c.env);
   const hints = parseKinisiRoutingHints(c.req.raw.headers);
 
   if (hints.enabled) {
@@ -439,7 +446,8 @@ async function handleLegacyRequest(
   body: ReturnType<typeof chatCompletionRequestSchema.parse>,
   rawBody: unknown,
   client: ClientConfig,
-  requestStart: number
+  requestStart: number,
+  hasRetriedCreditFallback = false
 ): Promise<Response> {
   const model = body.model || client.defaultModel || 'gpt-4o';
   const routeId = createLegacyRouteId();
@@ -554,9 +562,20 @@ async function handleLegacyRequest(
     );
 
     if (!response.ok) {
+      const errorText = await response.text();
+
+      if (
+        !hasRetriedCreditFallback
+        && route.provider !== 'openrouter'
+        && client.fallbackStrategy !== 'fail-fast'
+        && isCreditExhaustionResponse(response.status, errorText)
+      ) {
+        await markProviderCreditsExhausted(c.env, route.provider);
+        return handleLegacyRequest(c, body, rawBody, client, requestStart, true);
+      }
+
       await recordCircuitBreakerFailure(c.env, route.provider);
 
-      const errorText = await response.text();
       const errorPayload = {
         error: 'Provider error',
         provider: route.provider,
