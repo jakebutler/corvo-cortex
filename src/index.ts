@@ -10,6 +10,7 @@ import responsesRoutes from './routes/responses';
 import { CircuitBreaker } from './durable-objects/circuit-breaker';
 import { CreditLedger } from './durable-objects/credit-ledger';
 import { refreshAllModelCatalogs } from './services/models-catalog';
+import { syncOpenRouterCredits } from './services/credits';
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -75,6 +76,12 @@ export default {
       await refreshAllModelCatalogs(env);
     } catch (error) {
       console.error('Fireworks model catalog refresh failed:', error);
+    }
+
+    try {
+      await syncOpenRouterCredits(env);
+    } catch (error) {
+      console.error('OpenRouter credit sync failed:', error);
     }
   }
 };

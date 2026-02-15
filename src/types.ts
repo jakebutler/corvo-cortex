@@ -89,6 +89,7 @@ export interface Env {
 
   // Environment variables
   ENVIRONMENT: string;
+  AUTH_CACHE_TTL_MS?: string;
   ALLOWED_ORIGINS?: string; // Comma-separated list of allowed origins for CORS
 }
 

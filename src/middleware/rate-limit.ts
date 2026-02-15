@@ -117,9 +117,7 @@ export const rateLimitIncrementMiddleware: MiddlewareHandler<{ Bindings: Env; Va
     const requestBody = c.get('requestBody');
 
     if (rateLimitKey && requestBody) {
-      // Get current usage
-      const currentUsage = await c.env.CORTEX_CLIENTS.get(rateLimitKey, { type: 'json' }) as RateLimitUsage | null;
-      const usage = currentUsage || { requests: 0, tokens: 0 };
+      const usage = c.get('currentUsage') || { requests: 0, tokens: 0 };
 
       // Estimate tokens from request
       const estimatedTokens = estimateRequestTokens(requestBody as { messages?: Array<{ content: string }> });
@@ -127,6 +125,7 @@ export const rateLimitIncrementMiddleware: MiddlewareHandler<{ Bindings: Env; Va
       // Increment counters
       usage.requests++;
       usage.tokens += estimatedTokens;
+      c.set('currentUsage', usage);
 
       // Save to KV with 2 minute TTL (to allow for clock skew)
       await c.env.CORTEX_CLIENTS.put(rateLimitKey, JSON.stringify(usage), {

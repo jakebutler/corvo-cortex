@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { rateLimitCheckMiddleware } from '../../src/middleware/rate-limit';
+import { rateLimitCheckMiddleware, rateLimitIncrementMiddleware } from '../../src/middleware/rate-limit';
 import { authMiddleware } from '../../src/middleware/auth';
 import { Hono } from 'hono';
 import { createMockKV, createMockClientConfig, TEST_API_KEY } from '../mocks/env';
@@ -104,5 +104,52 @@ describe('rateLimitCheckMiddleware', () => {
     const json = await response.json() as { success: boolean };
     expect(json.success).toBe(true);
   });
-});
 
+  it('should read rate-limit usage only once per request path', async () => {
+    let rateLimitReads = 0;
+    const minute = Math.floor(Date.now() / 60000);
+    const rateLimitKey = `ratelimit:${TEST_API_KEY}:${minute}`;
+
+    const mockEnv: Env = {
+      CORTEX_CLIENTS: {
+        get: async (key: string, options?: { type?: string }) => {
+          if (options?.type !== 'json') return null;
+          if (key === TEST_API_KEY) return createMockClientConfig();
+          if (key === rateLimitKey) {
+            rateLimitReads += 1;
+            return { requests: 0, tokens: 0 };
+          }
+          return null;
+        },
+        put: async () => undefined
+      } as unknown as KVNamespace,
+      CORTEX_CONFIG: createMockKV(),
+      ANTHROPIC_API_KEY: 'test',
+      OPENAI_API_KEY: 'test',
+      ZAI_API_KEY: 'test',
+      OPENROUTER_API_KEY: 'test',
+      LANGFUSE_PUBLIC_KEY: 'test',
+      LANGFUSE_SECRET_KEY: 'test',
+      CIRCUIT_BREAKER: {} as unknown as DurableObjectNamespace,
+      ENVIRONMENT: 'test'
+    } as Env;
+
+    const testApp = new Hono<{ Bindings: Env; Variables: Variables }>();
+    testApp.use('*', authMiddleware);
+    testApp.use('*', rateLimitCheckMiddleware);
+    testApp.use('*', rateLimitIncrementMiddleware);
+    testApp.post('/chat', async (c) => {
+      c.set('requestBody', { messages: [{ content: 'hello world' }] });
+      return c.json({ ok: true });
+    });
+
+    const request = new Request('http://localhost/chat', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${TEST_API_KEY}` }
+    });
+
+    const response = await testApp.fetch(request, mockEnv);
+    expect(response.status).toBe(200);
+    expect(rateLimitReads).toBe(1);
+  });
+});

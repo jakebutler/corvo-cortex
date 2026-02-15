@@ -6,6 +6,70 @@ declare module 'hono' {
   interface ContextVariableMap extends Variables {}
 }
 
+type CachedClient = (ClientConfig & { admin?: boolean }) | null;
+interface CacheEntry {
+  value: CachedClient;
+  expiresAt: number;
+}
+
+let authCache = new Map<string, CacheEntry>();
+let namespaceIds = new WeakMap<object, string>();
+let namespaceCounter = 0;
+const DEFAULT_AUTH_CACHE_TTL_MS = 30_000;
+
+function getAuthCacheTtlMs(env: Env): number {
+  const parsed = Number.parseInt(env.AUTH_CACHE_TTL_MS || '', 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return DEFAULT_AUTH_CACHE_TTL_MS;
+  }
+  return parsed;
+}
+
+function getNamespaceCacheKey(env: Env, apiKey: string): string {
+  const namespace = env.CORTEX_CLIENTS as unknown as object;
+  let namespaceId = namespaceIds.get(namespace);
+  if (!namespaceId) {
+    namespaceCounter += 1;
+    namespaceId = `ns-${namespaceCounter}`;
+    namespaceIds.set(namespace, namespaceId);
+  }
+
+  return `${namespaceId}:${apiKey}`;
+}
+
+function fromAuthCache(cacheKey: string): CachedClient | undefined {
+  const now = Date.now();
+  const entry = authCache.get(cacheKey);
+  if (!entry) return undefined;
+  if (entry.expiresAt <= now) {
+    authCache.delete(cacheKey);
+    return undefined;
+  }
+  return entry.value;
+}
+
+function storeAuthCache(cacheKey: string, value: CachedClient, ttlMs: number): CachedClient {
+  authCache.set(cacheKey, {
+    value,
+    expiresAt: Date.now() + ttlMs
+  });
+  return value;
+}
+
+async function getClientFromCacheOrKv(
+  env: Env,
+  apiKey: string
+): Promise<CachedClient> {
+  const cacheKey = getNamespaceCacheKey(env, apiKey);
+  const cached = fromAuthCache(cacheKey);
+  if (cached !== undefined) {
+    return cached;
+  }
+
+  const client = await env.CORTEX_CLIENTS.get(apiKey, { type: 'json' }) as CachedClient;
+  return storeAuthCache(cacheKey, client, getAuthCacheTtlMs(env));
+}
+
 /**
  * Authentication middleware for API key validation
  *
@@ -25,7 +89,7 @@ export const authMiddleware: MiddlewareHandler<{ Bindings: Env; Variables: Varia
   }
 
   // 2. Validate against KV store
-  const clientData = await c.env.CORTEX_CLIENTS.get(apiKey, { type: 'json' }) as ClientConfig | null;
+  const clientData = await getClientFromCacheOrKv(c.env, apiKey);
 
   if (!clientData) {
     return c.json(
@@ -55,7 +119,7 @@ export const adminAuthMiddleware: MiddlewareHandler<{ Bindings: Env; Variables: 
     );
   }
 
-  const clientData = await c.env.CORTEX_CLIENTS.get(apiKey, { type: 'json' }) as ClientConfig & { admin?: boolean } | null;
+  const clientData = await getClientFromCacheOrKv(c.env, apiKey);
 
   if (!clientData) {
     return c.json(
@@ -76,3 +140,9 @@ export const adminAuthMiddleware: MiddlewareHandler<{ Bindings: Env; Variables: 
 
   await next();
 };
+
+export function __clearAuthCacheForTests(): void {
+  authCache = new Map<string, CacheEntry>();
+  namespaceIds = new WeakMap<object, string>();
+  namespaceCounter = 0;
+}

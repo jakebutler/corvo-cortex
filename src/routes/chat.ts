@@ -16,8 +16,7 @@ import {
   deductCredits,
   getCreditBalance,
   isCreditExhaustionResponse,
-  markProviderCreditsExhausted,
-  syncOpenRouterCreditsIfStale
+  markProviderCreditsExhausted
 } from '../services/credits';
 import { getAdapterForProvider } from '../utils/transform';
 import { createStreamingResponseWithUsage } from '../utils/streaming';
@@ -159,7 +158,6 @@ chatApp.post('/', async (c) => {
   }
 
   const body = validationResult.data;
-  await syncOpenRouterCreditsIfStale(c.env);
   const hints = parseKinisiRoutingHints(c.req.raw.headers);
 
   if (hints.enabled) {
