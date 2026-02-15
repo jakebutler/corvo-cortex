@@ -1,6 +1,6 @@
 # Corvo Cortex Specification
 
-**Version:** 2.2.0 | **Last Updated:** February 11, 2026
+**Version:** 2.2.0 | **Last Updated:** February 15, 2026
 
 ---
 
@@ -12,7 +12,7 @@ Corvo Cortex is a **serverless AI Gateway and Smart Router** that acts as the ce
 
 - **Smart Provider Routing** - Intelligently routes to prioritize free credits (OpenAI, Anthropic, Z.ai, MiniMax)
 - **Authentication** - App-specific API keys stored in Cloudflare KV
-- **Rate Limiting** - Per-client quotas (requests/minute, tokens/minute)
+- **Rate Limiting Middleware** - Available for per-client quotas; currently disabled on chat route and active on `/v1/responses`
 - **Circuit Breaker** - Prevents cascading failures with auto-recovery
 - **Streaming Support** - Real-time SSE streaming for all providers
 - **Telemetry** - Langfuse integration for cost tracking and analytics
@@ -95,9 +95,10 @@ interface ClientConfig {
 }
 ```
 
-### Rate Limit Tracking
+### Rate Limit Tracking (when enabled)
 
-Stored in `CORTEX_CLIENTS` KV with key format: `ratelimit:{apiKey}:{minute}`
+Stored in `CORTEX_CLIENTS` KV with key format: `ratelimit:{apiKey}:{minute}`.
+This tracking is not currently active for `POST /v1/chat/completions`.
 
 ```typescript
 interface RateLimitUsage {
@@ -226,7 +227,7 @@ When unavailable, values are set to `unknown` instead of omitted.
 
 ---
 
-## Request Flow
+## Chat Request Flow
 
 ```
 Client Request
@@ -237,10 +238,6 @@ Client Request
          ↓
 ┌─────────────────┐
 │  Auth Middleware │ → 401 if invalid key
-└────────┬────────┘
-         ↓
-┌─────────────────┐
-│ Rate Limit Check│ → 429 if quota exceeded
 └────────┬────────┘
          ↓
 ┌─────────────────┐
@@ -274,10 +271,6 @@ Client Request
 └────────┬────────┘
          ↓
 ┌─────────────────┐
-│ Rate Limit Incr │
-└────────┬────────┘
-         ↓
-┌─────────────────┐
 │ Telemetry Ingest│ (async, non-blocking)
 └────────┬────────┘
          ↓
@@ -308,7 +301,7 @@ Client Request
 | 401 | Unauthorized | Missing or invalid API key |
 | 402 | Payment Required | Credits exhausted + fail-fast strategy |
 | 403 | Forbidden | Admin access required |
-| 429 | Rate limit exceeded | Quota exceeded (requests or tokens) |
+| 429 | Rate limit exceeded | Quota exceeded on routes where middleware is active (for example `/v1/responses`) |
 | 503 | Service unavailable | Circuit breaker open |
 
 ---

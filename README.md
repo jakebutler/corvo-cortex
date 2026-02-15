@@ -13,7 +13,7 @@ Corvo Cortex is a serverless AI Gateway built on Cloudflare Workers that decoupl
 - **Smart Provider Routing** - Intelligently routes to prioritize free credits (OpenAI, Anthropic, Z.ai)
 - **Credit-Aware Fallback** - Automatically retries via OpenRouter when direct provider credits are exhausted
 - **Authentication** - App-specific API keys stored in Cloudflare KV
-- **Rate Limiting** - Per-client quotas (requests/minute, tokens/minute)
+- **Rate Limiting Middleware** - Enabled for `/v1/responses`, currently disabled on chat hot path
 - **Circuit Breaker** - Prevents cascading failures with auto-recovery
 - **Streaming Support** - Real-time SSE streaming for all providers
 - **Telemetry** - LangFuse integration for cost tracking and analytics
@@ -218,8 +218,6 @@ Client App
     ↓
 Auth Layer (KV validation)
     ↓
-Rate Limit Check
-    ↓
 Schema Validation (Zod)
     ↓
 Smart Routing
@@ -335,7 +333,7 @@ Access Cloudflare Dashboard for:
 | Error | Cause | Solution |
 |-------|-------|----------|
 | 401 Unauthorized | Invalid API key | Verify KV contains client config |
-| 429 Rate Limit | Quota exceeded | Wait for window reset or increase quota |
+| 429 Rate Limit | Quota exceeded (currently enforced on `/v1/responses`) | Wait for window reset or increase quota |
 | 503 Unavailable | Circuit breaker open | Check `/health/providers` endpoint |
 | 402 Payment Required | Credits exhausted | Add credits or change fallback strategy |
 

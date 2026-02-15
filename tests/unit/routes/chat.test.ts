@@ -211,6 +211,28 @@ describe('Chat Route - /v1/chat/completions', () => {
             expect(json.choices[0].message.content).toBe('Hello! How can I help?');
         });
 
+        it('should not include rate limit headers on successful responses', async () => {
+            const request = new Request('http://localhost/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${TEST_API_KEY}`
+                },
+                body: JSON.stringify({
+                    model: 'gpt-4o',
+                    messages: [{ role: 'user', content: 'Hello' }]
+                })
+            });
+
+            const response = await chatApp.fetch(request, mockEnv, mockExecutionCtx);
+
+            expect(response.status).toBe(200);
+            expect(response.headers.get('RateLimit-Limit')).toBeNull();
+            expect(response.headers.get('RateLimit-Remaining')).toBeNull();
+            expect(response.headers.get('RateLimit-Reset')).toBeNull();
+            expect(response.headers.get('RateLimit-Used')).toBeNull();
+        });
+
         it('should use default model when not specified', async () => {
             const request = new Request('http://localhost/', {
                 method: 'POST',

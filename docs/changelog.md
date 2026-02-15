@@ -18,6 +18,7 @@ This changelog follows [Keep a Changelog](https://keepachangelog.com/) format an
 - `POST /v1/chat/completions` now supports opt-in policy-based routing without changing legacy behavior when hints are absent.
 - Telemetry metadata now captures routing dimensions (`stage`, `strategy`, `route_id`, fallback/hedge flags).
 - CORS allow/expose headers now include `x-kinisi-*` request headers and `x-corvo-cortex-*` response headers.
+- Rate-limit middleware is now disabled on `POST /v1/chat/completions` to avoid per-request KV writes on Cloudflare free tier.
 
 - Telemetry transport switched from Langfuse JS SDK event flushing to direct Langfuse ingestion API calls in Workers runtime.
 - Telemetry now captures both successful and failed requests with full prompt/response payloads.

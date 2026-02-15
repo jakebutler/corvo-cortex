@@ -6,11 +6,16 @@ Per-client rate limiting system with request and token quotas.
 
 ## Overview
 
-Rate limiting is enforced per API key with two quota types:
+Rate limiting is implemented per API key with two quota types:
 - **Requests per minute** - Number of API calls
 - **Tokens per minute** - Estimated token usage
 
-Quotas are stored in KV with automatic expiration.
+> [!IMPORTANT]
+> As of February 15, 2026, rate-limit middleware is not mounted on `POST /v1/chat/completions` to reduce Cloudflare KV hot-path writes on free tier.
+>
+> The middleware and data model remain in the codebase for future re-enable, and are still active on `POST /v1/responses`.
+
+When enabled, quotas are stored in KV with automatic expiration.
 
 ---
 
@@ -44,7 +49,7 @@ ratelimit:{apiKey}:{minute}
 
 Example: `ratelimit:sk-corvo-kinisi-xxx:202601060830`
 
-### Flow
+### Flow (when enabled)
 
 1. **Pre-request check**: Compare current usage against limits
 2. **Request processing**: Allow or reject
@@ -64,7 +69,7 @@ return Math.floor(words * 1.3);
 
 ## Response Headers
 
-Successful responses include rate limit headers:
+Successful responses include rate limit headers when rate limiting is enabled:
 
 | Header | Description |
 |--------|-------------|
@@ -77,7 +82,7 @@ Successful responses include rate limit headers:
 
 ## Error Response
 
-When limit exceeded:
+When limit exceeded (while enabled):
 
 ```json
 {

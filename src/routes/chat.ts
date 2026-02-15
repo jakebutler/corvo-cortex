@@ -2,7 +2,6 @@ import { Hono } from 'hono';
 import type { Context } from 'hono';
 import type { Env, ClientConfig, LLMProvider, RoutingProvider, Variables } from '../types';
 import { authMiddleware } from '../middleware/auth';
-import { rateLimitCheckMiddleware, rateLimitIncrementMiddleware } from '../middleware/rate-limit';
 import {
   telemetryMiddleware,
   updateTelemetryMetadata,
@@ -44,9 +43,7 @@ type ChatContext = Context<{ Bindings: Env; Variables: Variables }>;
 
 // Apply middleware in order
 chatApp.use('*', authMiddleware);
-chatApp.use('*', rateLimitCheckMiddleware);
 chatApp.use('*', telemetryMiddleware);
-chatApp.use('*', rateLimitIncrementMiddleware);
 
 interface HeaderMetadata {
   provider?: string;
