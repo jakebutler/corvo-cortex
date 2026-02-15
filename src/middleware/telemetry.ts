@@ -13,6 +13,7 @@ interface TelemetryMetadata {
   input: unknown;
   completion: Promise<void>;
   deferCompletion: boolean;
+  metadata?: Record<string, unknown>;
 }
 
 /**
@@ -30,7 +31,8 @@ export const telemetryMiddleware: MiddlewareHandler<{ Bindings: Env; Variables: 
     model: 'unknown',
     input: c.get('requestBody') ?? null,
     completion: Promise.resolve(),
-    deferCompletion: false
+    deferCompletion: false,
+    metadata: {}
   };
 
   c.set('telemetry', metadata);
@@ -83,7 +85,8 @@ export const telemetryMiddleware: MiddlewareHandler<{ Bindings: Env; Variables: 
         endTime: Date.now(),
         costUsd,
         metadata: {
-          environment: c.env.ENVIRONMENT
+          environment: c.env.ENVIRONMENT,
+          ...(telemetry.metadata || {})
         },
         usage: usage ? {
           promptTokens: usage.prompt_tokens || 0,
@@ -110,18 +113,23 @@ export function updateTelemetryMetadata(
   c: { get: (key: string) => unknown; set: (key: string, value: unknown) => void },
   provider: string,
   model: string,
-  input: unknown
+  input: unknown,
+  extraMetadata?: Record<string, unknown>
 ): void {
   const existing = c.get('telemetry') as TelemetryMetadata | undefined;
-  const metadata: TelemetryMetadata = {
+  const nextMetadata: TelemetryMetadata = {
     startTime: existing?.startTime || Date.now(),
     provider: provider || existing?.provider || 'unresolved',
     model: model || existing?.model || 'unknown',
     input: input ?? existing?.input ?? null,
     completion: existing?.completion || Promise.resolve(),
-    deferCompletion: existing?.deferCompletion || false
+    deferCompletion: existing?.deferCompletion || false,
+    metadata: {
+      ...(existing?.metadata || {}),
+      ...(extraMetadata || {})
+    }
   };
-  c.set('telemetry', metadata);
+  c.set('telemetry', nextMetadata);
 }
 
 /**
@@ -159,7 +167,8 @@ export function setTelemetryCompletion(
     model: existing?.model || 'unknown',
     input: existing?.input ?? null,
     completion,
-    deferCompletion: true
+    deferCompletion: true,
+    metadata: existing?.metadata || {}
   };
   c.set('telemetry', metadata);
 }

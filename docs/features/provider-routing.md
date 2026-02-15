@@ -10,6 +10,7 @@ The router (`src/services/router.ts`) determines which LLM provider handles each
 - Requested model name
 - Available credits (environment flags)
 - Client fallback strategy configuration
+- Optional header-driven hints (`x-kinisi-*`) on `POST /v1/chat/completions`
 
 ---
 
@@ -94,3 +95,43 @@ Request: model="claude-3-5-sonnet"
 
 - [spec.md](../spec.md) - Full API documentation
 - [Circuit Breaker](./circuit-breaker.md) - Provider health management
+- [Header Routing Client Integration](./header-routing-client-integration.md) - Client implementation guide
+
+---
+
+## Header-Driven Routing (`x-kinisi-*`)
+
+Corvo Cortex supports an opt-in header contract on `POST /v1/chat/completions`:
+
+- `x-kinisi-llm-stage`: `week_1 | week_n | refine_week_1`
+- `x-kinisi-routing-strategy`: `speed | balanced | quality`
+- `x-kinisi-provider-prefer`: CSV provider order
+- `x-kinisi-provider-allow`: CSV allowlist
+- `x-kinisi-provider-block`: CSV denylist
+- `x-kinisi-request-priority`: `low | normal | high`
+- `x-kinisi-max-latency-ms`: caller latency budget
+- `x-kinisi-request-role`: `primary | hedge | fallback`
+- `x-kinisi-model`: model override (wins over body `model`)
+
+Behavior:
+
+- If no `x-kinisi-*` headers are present, legacy routing behavior is unchanged.
+- Invalid header values fall back to defaults (request is not rejected).
+- Route constraints that eliminate all candidates are ignored and safe defaults are used.
+- Hedging is enabled only for `week_n + speed + primary`.
+- `stream=true` with strict `response_format.json_schema` returns `400`.
+
+## Response Metadata Headers
+
+Corvo Cortex now returns deterministic metadata headers on both success and error:
+
+- `x-corvo-cortex-provider`
+- `x-corvo-cortex-model`
+- `x-corvo-cortex-route-id`
+- `x-corvo-cortex-fallback-used`
+- `x-corvo-cortex-hedge-used`
+- `x-corvo-cortex-cache-hit`
+- `x-corvo-cortex-ttft-ms`
+- `x-corvo-cortex-latency-ms`
+
+Unavailable values are returned as `unknown`.

@@ -27,23 +27,27 @@ const GEMINI_MODELS_URL = 'https://ai.google.dev/models/gemini';
 const ZAI_CHAT_COMPLETION_URL = 'https://docs.z.ai/api-reference/llm/chat-completion';
 const MINIMAX_OVERVIEW_URL = 'https://platform.minimax.io/docs/api-reference/api-overview';
 
-const MODEL_KEYS: Record<ModelProvider, string> = {
-  'openai': 'models:openai',
-  'anthropic': 'models:anthropic',
-  'z-ai': 'models:z-ai',
-  'minimax': 'models:minimax',
-  'openrouter': 'models:openrouter',
-  'fireworks': 'models:fireworks:catalog',
-  'gemini': 'models:gemini'
-};
-
 const ALL_MODELS_KEY = 'models:all';
+
+interface CatalogRefreshResult {
+  ok: boolean;
+  count: number;
+  error?: string;
+}
 
 export async function refreshAllModelCatalogs(
   env: Env,
   providers: ModelProvider[] = ['openai', 'anthropic', 'z-ai', 'minimax', 'openrouter', 'fireworks', 'gemini']
-): Promise<Record<ModelProvider, { ok: boolean; count: number; error?: string }>> {
-  const results = {} as Record<ModelProvider, { ok: boolean; count: number; error?: string }>;
+): Promise<Record<ModelProvider, CatalogRefreshResult>> {
+  const results: Record<ModelProvider, CatalogRefreshResult> = {
+    openai: { ok: false, count: 0, error: 'not_requested' },
+    anthropic: { ok: false, count: 0, error: 'not_requested' },
+    'z-ai': { ok: false, count: 0, error: 'not_requested' },
+    minimax: { ok: false, count: 0, error: 'not_requested' },
+    openrouter: { ok: false, count: 0, error: 'not_requested' },
+    fireworks: { ok: false, count: 0, error: 'not_requested' },
+    gemini: { ok: false, count: 0, error: 'not_requested' }
+  };
   const catalogs: ModelCatalog[] = [];
   const openrouterRaw = providers.includes('openrouter') || providers.includes('openai') || providers.includes('anthropic') || providers.includes('gemini')
     ? await fetchOpenRouterRaw(env)
@@ -54,13 +58,13 @@ export async function refreshAllModelCatalogs(
       const catalog = await refreshProviderCatalog(env, provider, openrouterRaw);
       if (catalog) {
         catalogs.push(catalog);
-        results[provider] = { ok: true, count: catalog.models.length };
+        setRefreshResult(results, provider, { ok: true, count: catalog.models.length });
       } else {
-        results[provider] = { ok: false, count: 0, error: 'No catalog data' };
+        setRefreshResult(results, provider, { ok: false, count: 0, error: 'No catalog data' });
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error';
-      results[provider] = { ok: false, count: 0, error: message };
+      setRefreshResult(results, provider, { ok: false, count: 0, error: message });
       const existing = await getModelCatalog(env, provider);
       if (existing) {
         catalogs.push(existing);
@@ -90,7 +94,7 @@ export async function getModelCatalog(env: Env, provider: ModelProvider): Promis
   if (!env.CORTEX_CONFIG || typeof env.CORTEX_CONFIG.get !== 'function') {
     return null;
   }
-  const key = MODEL_KEYS[provider];
+  const key = getModelCatalogKey(provider);
   const catalog = await env.CORTEX_CONFIG.get(key, { type: 'json' }) as ModelCatalog | null;
   return catalog;
 }
@@ -131,7 +135,7 @@ async function refreshProviderCatalog(env: Env, provider: ModelProvider, openrou
   };
 
   if (env.CORTEX_CONFIG && typeof env.CORTEX_CONFIG.put === 'function') {
-    await env.CORTEX_CONFIG.put(MODEL_KEYS[provider], JSON.stringify(catalog), {
+    await env.CORTEX_CONFIG.put(getModelCatalogKey(provider), JSON.stringify(catalog), {
       expirationTtl: 60 * 60 * 24 * 30
     });
   }
@@ -183,7 +187,7 @@ async function fetchOpenAIModels(env: Env, openrouterRaw: OpenRouterRawModel[] |
     id: model.id,
     provider: 'openai',
     name: model.id,
-    modalities: inferOpenAIModalities(model.id),
+      modalities: inferOpenAIModalities(),
     metadata: {
       created: model.created,
       owned_by: model.owned_by
@@ -198,7 +202,7 @@ function isOpenAIChatOrImage(id: string): boolean {
   return !deny;
 }
 
-function inferOpenAIModalities(id: string): { input: string[]; output: string[] } {
+function inferOpenAIModalities(): { input: string[]; output: string[] } {
   return { input: ['text'], output: ['text'] };
 }
 
@@ -262,8 +266,8 @@ async function fetchAnthropicModels(env: Env, openrouterRaw: OpenRouterRawModel[
 
 async function fetchOpenRouterModels(env: Env): Promise<ModelRecord[]> {
   const models = await fetchOpenRouterRaw(env);
-  return models
-    .map(model => ({
+  const records: ModelRecord[] = models
+    .map((model): ModelRecord => ({
       id: model.id,
       provider: 'openrouter',
       name: model.name || model.id,
@@ -277,6 +281,8 @@ async function fetchOpenRouterModels(env: Env): Promise<ModelRecord[]> {
       }
     }))
     .filter(model => isChatOrImageModalities(model.modalities));
+
+  return records;
 }
 
 interface OpenRouterRawModel {
@@ -378,14 +384,14 @@ async function fetchMiniMaxModels(): Promise<ModelRecord[]> {
   const textList = textModels.size ? Array.from(textModels) : fallbackText;
   const imageList = imageModels.size ? Array.from(imageModels) : fallbackImage;
 
-  const textRecords = textList.map(id => ({
+  const textRecords: ModelRecord[] = textList.map((id): ModelRecord => ({
     id,
     provider: 'minimax',
     name: id,
     modalities: { input: ['text'], output: ['text'] }
   }));
 
-  const imageRecords = imageList.map(id => ({
+  const imageRecords: ModelRecord[] = imageList.map((id): ModelRecord => ({
     id,
     provider: 'minimax',
     name: id,
@@ -467,6 +473,59 @@ async function fetchGeminiModels(openrouterRaw: OpenRouterRawModel[] | null): Pr
     return finalList.map(id => geminiRecord(id));
   } catch {
     return fallback.map(id => geminiRecord(id));
+  }
+}
+
+function getModelCatalogKey(provider: ModelProvider): string {
+  switch (provider) {
+    case 'openai':
+      return 'models:openai';
+    case 'anthropic':
+      return 'models:anthropic';
+    case 'z-ai':
+      return 'models:z-ai';
+    case 'minimax':
+      return 'models:minimax';
+    case 'openrouter':
+      return 'models:openrouter';
+    case 'fireworks':
+      return 'models:fireworks:catalog';
+    case 'gemini':
+      return 'models:gemini';
+    default:
+      return 'models:openai';
+  }
+}
+
+function setRefreshResult(
+  results: Record<ModelProvider, CatalogRefreshResult>,
+  provider: ModelProvider,
+  result: CatalogRefreshResult
+): void {
+  switch (provider) {
+    case 'openai':
+      results.openai = result;
+      return;
+    case 'anthropic':
+      results.anthropic = result;
+      return;
+    case 'z-ai':
+      results['z-ai'] = result;
+      return;
+    case 'minimax':
+      results.minimax = result;
+      return;
+    case 'openrouter':
+      results.openrouter = result;
+      return;
+    case 'fireworks':
+      results.fireworks = result;
+      return;
+    case 'gemini':
+      results.gemini = result;
+      return;
+    default:
+      results.openai = result;
   }
 }
 
