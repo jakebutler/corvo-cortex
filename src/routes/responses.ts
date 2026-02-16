@@ -1,7 +1,6 @@
 import { Hono } from 'hono';
 import type { Env, LLMProvider } from '../types';
 import { authMiddleware } from '../middleware/auth';
-import { rateLimitCheckMiddleware, rateLimitIncrementMiddleware } from '../middleware/rate-limit';
 import {
   telemetryMiddleware,
   updateTelemetryMetadata,
@@ -17,9 +16,7 @@ import { fetchWithRetry } from '../utils/retry';
 const responsesApp = new Hono<{ Bindings: Env }>();
 
 responsesApp.use('*', authMiddleware);
-responsesApp.use('*', rateLimitCheckMiddleware);
 responsesApp.use('*', telemetryMiddleware);
-responsesApp.use('*', rateLimitIncrementMiddleware);
 
 async function checkCircuitBreaker(
   env: Env,

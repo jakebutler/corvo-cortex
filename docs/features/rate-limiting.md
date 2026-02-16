@@ -11,9 +11,9 @@ Rate limiting is implemented per API key with two quota types:
 - **Tokens per minute** - Estimated token usage
 
 > [!IMPORTANT]
-> As of February 15, 2026, rate-limit middleware is not mounted on `POST /v1/chat/completions` to reduce Cloudflare KV hot-path writes on free tier.
+> As of February 15, 2026, rate-limit middleware is not mounted on request-serving routes (`POST /v1/chat/completions` and `POST /v1/responses`) to reduce Cloudflare KV hot-path writes on free tier.
 >
-> The middleware and data model remain in the codebase for future re-enable, and are still active on `POST /v1/responses`.
+> The middleware and data model remain in the codebase for future re-enable.
 
 When enabled, quotas are stored in KV with automatic expiration.
 

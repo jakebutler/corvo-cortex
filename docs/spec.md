@@ -12,7 +12,7 @@ Corvo Cortex is a **serverless AI Gateway and Smart Router** that acts as the ce
 
 - **Smart Provider Routing** - Intelligently routes to prioritize free credits (OpenAI, Anthropic, Z.ai, MiniMax)
 - **Authentication** - App-specific API keys stored in Cloudflare KV
-- **Rate Limiting Middleware** - Available for per-client quotas; currently disabled on chat route and active on `/v1/responses`
+- **Rate Limiting Middleware** - Available for per-client quotas, currently disabled on request-serving routes
 - **Circuit Breaker** - Prevents cascading failures with auto-recovery
 - **Streaming Support** - Real-time SSE streaming for all providers
 - **Telemetry** - Langfuse integration for cost tracking and analytics
@@ -301,7 +301,6 @@ Client Request
 | 401 | Unauthorized | Missing or invalid API key |
 | 402 | Payment Required | Credits exhausted + fail-fast strategy |
 | 403 | Forbidden | Admin access required |
-| 429 | Rate limit exceeded | Quota exceeded on routes where middleware is active (for example `/v1/responses`) |
 | 503 | Service unavailable | Circuit breaker open |
 
 ---
