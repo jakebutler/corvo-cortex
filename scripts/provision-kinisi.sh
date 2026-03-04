@@ -29,8 +29,8 @@ JSON_CONFIG='{
   }
 }'
 
-echo "Running wrangler kv:key put..."
-wrangler kv:key put --namespace-id="$NAMESPACE_ID" "$API_KEY" "$JSON_CONFIG" --env production
+echo "Running wrangler kv key put..."
+npx wrangler kv key put --namespace-id="$NAMESPACE_ID" "$API_KEY" "$JSON_CONFIG" --env production --remote
 
 echo ""
 echo "✅ Credentials Provisioned!"

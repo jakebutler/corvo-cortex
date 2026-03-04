@@ -34,8 +34,8 @@ wrangler login
 
 ```bash
 # Create production KV namespaces
-wrangler kv:namespace create CORTEX_CLIENTS --env production
-wrangler kv:namespace create CORTEX_CONFIG --env production
+wrangler kv namespace create CORTEX_CLIENTS --env production
+wrangler kv namespace create CORTEX_CONFIG --env production
 ```
 
 **IMPORTANT:** Update the namespace IDs in `wrangler.toml` with the returned IDs:
@@ -70,7 +70,7 @@ wrangler secret put LANGFUSE_SECRET_KEY --env production
 Add a client to the KV store:
 
 ```bash
-wrangler kv:key put --namespace-id=<NAMESPACE_ID> "sk-corvo-kinisi-xxx" '{
+wrangler kv key put --namespace-id=<NAMESPACE_ID> "sk-corvo-kinisi-xxx" '{
   "appId": "kinisi",
   "name": "Kinisi Mobile",
   "defaultModel": "claude-3-5-sonnet",
@@ -80,19 +80,19 @@ wrangler kv:key put --namespace-id=<NAMESPACE_ID> "sk-corvo-kinisi-xxx" '{
     "requestsPerMinute": 100,
     "tokensPerMinute": 50000
   }
-}' --env production
+}' --env production --remote
 ```
 
 ### 3.2 Add Models List Configuration
 
 ```bash
-wrangler kv:key put --namespace-id=<CONFIG_NAMESPACE_ID> "MODELS_LIST" '{
+wrangler kv key put --namespace-id=<CONFIG_NAMESPACE_ID> "MODELS_LIST" '{
   "data": [
     { "id": "gpt-4o", "provider": "openai", "name": "GPT-4o (Reasoning)" },
     { "id": "claude-3-5-sonnet", "provider": "anthropic", "name": "Claude 3.5 Sonnet (Coding)" },
     { "id": "glm-4-plus", "provider": "z-ai", "name": "GLM-4 (Creative)" }
   ]
-}' --env production
+}' --env production --remote
 ```
 
 ---
@@ -118,6 +118,23 @@ curl https://cortex.corvolabs.com/health
 # Test models endpoint (requires valid API key)
 curl -H "Authorization: Bearer sk-corvo-kinisi-xxx" \
   https://cortex.corvolabs.com/v1/models
+```
+
+### 4.3 KV Troubleshooting (CLI vs Dashboard)
+
+If KV keys in CLI do not match what you see in Cloudflare Dashboard, verify you are using:
+
+- `--env production` to target `[env.production]` namespace bindings
+- `--remote` to query/write Cloudflare KV instead of local development storage
+
+Examples:
+
+```bash
+# Production (remote, matches dashboard)
+wrangler kv key list --binding CORTEX_CLIENTS --env production --remote
+
+# Local development KV (can differ)
+wrangler kv key list --binding CORTEX_CLIENTS --env production
 ```
 
 ---

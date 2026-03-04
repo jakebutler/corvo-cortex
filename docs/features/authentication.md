@@ -60,7 +60,7 @@ context.set('client', clientData);
 Via Wrangler CLI:
 
 ```bash
-wrangler kv:key put --namespace-id=<ID> "sk-corvo-myapp-xxx" '{
+wrangler kv key put --namespace-id=<ID> "sk-corvo-myapp-xxx" '{
   "appId": "myapp",
   "name": "My Application",
   "defaultModel": "gpt-4o",
@@ -70,7 +70,7 @@ wrangler kv:key put --namespace-id=<ID> "sk-corvo-myapp-xxx" '{
     "requestsPerMinute": 100,
     "tokensPerMinute": 50000
   }
-}'
+}' --remote
 ```
 
 ---

@@ -18,6 +18,6 @@ fi
 KEY="routing:kinisi-hints:${ENV_NAME}"
 
 echo "Uploading routing policy to key: ${KEY} (env: ${ENV_NAME})"
-wrangler kv key put --binding CORTEX_CONFIG "$KEY" --path "$POLICY_FILE" --env "$ENV_NAME"
+npx wrangler kv key put --binding CORTEX_CONFIG "$KEY" --path "$POLICY_FILE" --env "$ENV_NAME" --remote
 
 echo "Done."

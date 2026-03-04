@@ -17,7 +17,7 @@ echo ""
 
 # Add Kinisi client
 echo "Adding Kinisi Mobile client..."
-wrangler kv:key put --namespace-id="$CLIENTS_NAMESPACE_ID" "sk-corvo-kinisi-a1b2c3d4e5f6" '{
+npx wrangler kv key put --namespace-id="$CLIENTS_NAMESPACE_ID" "sk-corvo-kinisi-a1b2c3d4e5f6" '{
   "appId": "kinisi",
   "name": "Kinisi Mobile",
   "defaultModel": "claude-3-5-sonnet",
@@ -27,14 +27,14 @@ wrangler kv:key put --namespace-id="$CLIENTS_NAMESPACE_ID" "sk-corvo-kinisi-a1b2
     "requestsPerMinute": 100,
     "tokensPerMinute": 50000
   }
-}' --env production
+}' --env production --remote
 
 echo "✅ Kinisi client added"
 echo ""
 
 # Add models list
 echo "📋 Adding models list configuration..."
-wrangler kv:key put --namespace-id="$CONFIG_NAMESPACE_ID" "MODELS_LIST" '{
+npx wrangler kv key put --namespace-id="$CONFIG_NAMESPACE_ID" "MODELS_LIST" '{
   "data": [
     { "id": "gpt-4o", "provider": "openai", "name": "GPT-4o (Reasoning)" },
     { "id": "claude-3-5-sonnet", "provider": "anthropic", "name": "Claude 3.5 Sonnet (Coding)" },
@@ -42,7 +42,7 @@ wrangler kv:key put --namespace-id="$CONFIG_NAMESPACE_ID" "MODELS_LIST" '{
     { "id": "gpt-4o-mini", "provider": "openai", "name": "GPT-4o Mini (Fast)" },
     { "id": "claude-3-haiku", "provider": "anthropic", "name": "Claude 3 Haiku (Economical)" }
   ]
-}' --env production
+}' --env production --remote
 
 echo "✅ Models list configuration added"
 echo ""
@@ -50,4 +50,4 @@ echo ""
 echo "✅ Initial data seeded successfully!"
 echo ""
 echo "To add more clients, use:"
-echo "wrangler kv:key put --namespace-id=$CLIENTS_NAMESPACE_ID \"sk-corvo-<app>-<random>\" '{...}' --env production"
+echo "wrangler kv key put --namespace-id=$CLIENTS_NAMESPACE_ID \"sk-corvo-<app>-<random>\" '{...}' --env production --remote"

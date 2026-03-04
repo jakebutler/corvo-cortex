@@ -177,8 +177,8 @@ If you prefer manual setup:
 
 ```bash
 # Create KV namespaces
-wrangler kv:namespace create CORTEX_CLIENTS --env production
-wrangler kv:namespace create CORTEX_CONFIG --env production
+wrangler kv namespace create CORTEX_CLIENTS --env production
+wrangler kv namespace create CORTEX_CONFIG --env production
 
 # Set secrets
 wrangler secret put ANTHROPIC_API_KEY --env production
@@ -196,7 +196,7 @@ wrangler deploy --env production
 ### Adding a New Client
 
 ```bash
-wrangler kv:key put --namespace-id=<CLIENTS_NAMESPACE_ID> "sk-corvo-myapp-xxx" '{
+wrangler kv key put --namespace-id=<CLIENTS_NAMESPACE_ID> "sk-corvo-myapp-xxx" '{
   "appId": "myapp",
   "name": "My Application",
   "defaultModel": "gpt-4o",
@@ -206,8 +206,10 @@ wrangler kv:key put --namespace-id=<CLIENTS_NAMESPACE_ID> "sk-corvo-myapp-xxx" '
     "requestsPerMinute": 100,
     "tokensPerMinute": 50000
   }
-}' --env production
+}' --env production --remote
 ```
+
+For CLI reads/writes against Cloudflare (dashboard data), include `--remote`.
 
 ## Architecture
 
