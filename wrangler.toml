@@ -38,7 +38,7 @@ new_sqlite_classes = ["CreditLedger"]
 
 [[migrations]]
 tag = "v3"
-new_classes = ["ProviderConcurrency"]
+new_sqlite_classes = ["ProviderConcurrency"]
 
 # Environment variables
 [vars]
@@ -102,7 +102,7 @@ new_sqlite_classes = ["CreditLedger"]
 
 [[env.production.migrations]]
 tag = "v3"
-new_classes = ["ProviderConcurrency"]
+new_sqlite_classes = ["ProviderConcurrency"]
 
 # Production Environment Variables and Credit Flags
 [env.production.vars]
