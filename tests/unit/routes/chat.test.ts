@@ -278,7 +278,7 @@ describe('Chat Route - /v1/chat/completions', () => {
                     'Authorization': `Bearer ${TEST_API_KEY}`
                 },
                 body: JSON.stringify({
-                    model: 'glm-4.6',
+                    model: 'glm-5',
                     messages: [{ role: 'user', content: 'Hello' }]
                 })
             });
@@ -409,7 +409,7 @@ describe('Chat Route - /v1/chat/completions', () => {
                     'Authorization': `Bearer ${TEST_API_KEY}`
                 },
                 body: JSON.stringify({
-                    model: 'claude-3-5-sonnet',
+                    model: 'claude-sonnet-4-6',
                     messages: [{ role: 'user', content: 'Hello' }]
                 })
             });
