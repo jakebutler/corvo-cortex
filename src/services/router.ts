@@ -48,7 +48,7 @@ export async function determineProvider(
   if (model.includes('glm') || model.startsWith('z-ai')) {
     return {
       provider: 'z-ai-pro',
-      url: 'https://open.bigmodel.cn/api/paas/v4/chat/completions',
+      url: 'https://api.z.ai/api/coding/paas/v4/chat/completions',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${env.ZAI_API_KEY}`

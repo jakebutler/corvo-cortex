@@ -44,11 +44,26 @@ Configured per-client in the `ClientConfig`:
 
 | Provider | URL | Auth Header |
 |----------|-----|-------------|
-| Z.ai | `https://open.bigmodel.cn/api/paas/v4/chat/completions` | `Authorization: Bearer` |
+| Z.ai | `https://api.z.ai/api/coding/paas/v4/chat/completions` | `Authorization: Bearer` |
 | Anthropic | `https://api.anthropic.com/v1/messages` | `x-api-key` + `anthropic-version` |
 | OpenAI | `https://api.openai.com/v1/chat/completions` | `Authorization: Bearer` |
 | MiniMax | `https://api.minimax.io/anthropic/v1/messages` | `x-api-key` + `anthropic-version` |
 | OpenRouter | `https://openrouter.ai/api/v1/chat/completions` | `Authorization: Bearer` |
+
+---
+
+## Z.ai Concurrency Guard
+
+Corvo enforces model-level in-flight concurrency for `z-ai-pro` routes before calling upstream.
+
+- Enforcement runtime: `ProviderConcurrency` Durable Object
+- Request path: `POST /v1/chat/completions` (legacy model-based routing path)
+- Failure behavior: returns `429` with `error: "Provider concurrency limit reached"`
+- Release behavior:
+  - Non-stream requests release the slot after completion/error.
+  - Stream requests release on stream completion/error callbacks.
+
+The limit map follows the current Z.ai published model limits (for example `glm-4.6: 3`, `glm-4.7: 5`, `glm-4-plus: 20`) and is defined in `src/services/provider-concurrency.ts`.
 
 ---
 

@@ -199,6 +199,85 @@ export function createMockCreditLedger(): DurableObjectNamespace {
 }
 
 /**
+ * Mock Provider Concurrency Durable Object
+ */
+export function createMockProviderConcurrency(overrides?: {
+    acquireStatus?: number;
+    acquirePayload?: Record<string, unknown>;
+}): DurableObjectNamespace {
+    const activeLeases = new Set<string>();
+
+    const stub = {
+        fetch: async (request: Request) => {
+            const url = new URL(request.url);
+            const path = url.pathname;
+
+            if (path === '/acquire') {
+                const status = overrides?.acquireStatus ?? 200;
+                if (status !== 200) {
+                    return new Response(JSON.stringify(
+                        overrides?.acquirePayload ?? { acquired: false, limit: 3, inFlight: 3 }
+                    ), {
+                        status,
+                        headers: { 'Content-Type': 'application/json' }
+                    });
+                }
+
+                const leaseId = `lease-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+                activeLeases.add(leaseId);
+                return new Response(JSON.stringify({
+                    acquired: true,
+                    leaseId,
+                    limit: 3,
+                    inFlight: 1
+                }), {
+                    status: 200,
+                    headers: { 'Content-Type': 'application/json' }
+                });
+            }
+
+            if (path === '/release') {
+                const body = await request.json() as { leaseId?: string };
+                if (body.leaseId) {
+                    activeLeases.delete(body.leaseId);
+                }
+                return new Response(JSON.stringify({ released: true }), {
+                    status: 200,
+                    headers: { 'Content-Type': 'application/json' }
+                });
+            }
+
+            if (path === '/status') {
+                return new Response(JSON.stringify({
+                    counters: [],
+                    leases: activeLeases.size
+                }), {
+                    status: 200,
+                    headers: { 'Content-Type': 'application/json' }
+                });
+            }
+
+            if (path === '/reset') {
+                activeLeases.clear();
+                return new Response(JSON.stringify({ reset: true }), {
+                    status: 200,
+                    headers: { 'Content-Type': 'application/json' }
+                });
+            }
+
+            return new Response('Not found', { status: 404 });
+        }
+    };
+
+    return {
+        get: () => stub,
+        idFromName: () => ({ toString: () => 'mock-provider-concurrency-id' }),
+        idFromString: () => ({ toString: () => 'mock-provider-concurrency-id' }),
+        newUniqueId: () => ({ toString: () => 'mock-provider-concurrency-id' })
+    } as unknown as DurableObjectNamespace;
+}
+
+/**
  * Default test API key
  */
 export const TEST_API_KEY = 'sk-corvo-test-123';
@@ -223,6 +302,7 @@ export function createMockEnv(overrides?: Partial<Env>): Env {
         LANGFUSE_SECRET_KEY: 'test-langfuse-secret',
         CIRCUIT_BREAKER: createMockCircuitBreaker(),
         CREDIT_LEDGER: createMockCreditLedger(),
+        PROVIDER_CONCURRENCY: createMockProviderConcurrency(),
         ENVIRONMENT: 'test',
         ...overrides
     } as Env;

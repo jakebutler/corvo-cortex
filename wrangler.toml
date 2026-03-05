@@ -23,6 +23,10 @@ class_name = "CircuitBreaker"
 name = "CREDIT_LEDGER"
 class_name = "CreditLedger"
 
+[[durable_objects.bindings]]
+name = "PROVIDER_CONCURRENCY"
+class_name = "ProviderConcurrency"
+
 # Migrations
 [[migrations]]
 tag = "v1"
@@ -31,6 +35,10 @@ new_sqlite_classes = ["CircuitBreaker"]
 [[migrations]]
 tag = "v2"
 new_sqlite_classes = ["CreditLedger"]
+
+[[migrations]]
+tag = "v3"
+new_classes = ["ProviderConcurrency"]
 
 # Environment variables
 [vars]
@@ -80,6 +88,10 @@ class_name = "CircuitBreaker"
 name = "CREDIT_LEDGER"
 class_name = "CreditLedger"
 
+[[env.production.durable_objects.bindings]]
+name = "PROVIDER_CONCURRENCY"
+class_name = "ProviderConcurrency"
+
 [[env.production.migrations]]
 tag = "v1"
 new_sqlite_classes = ["CircuitBreaker"]
@@ -87,6 +99,10 @@ new_sqlite_classes = ["CircuitBreaker"]
 [[env.production.migrations]]
 tag = "v2"
 new_sqlite_classes = ["CreditLedger"]
+
+[[env.production.migrations]]
+tag = "v3"
+new_classes = ["ProviderConcurrency"]
 
 # Production Environment Variables and Credit Flags
 [env.production.vars]

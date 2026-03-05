@@ -43,7 +43,7 @@ describe('determineProvider', () => {
   it('should route to Z.ai for glm models', async () => {
     const route = await determineProvider('glm-4-plus', mockClient, mockEnv);
     expect(route.provider).toBe('z-ai-pro');
-    expect(route.url).toContain('bigmodel.cn');
+    expect(route.url).toBe('https://api.z.ai/api/coding/paas/v4/chat/completions');
   });
 
   it('should route to Anthropic for claude models with credits', async () => {

@@ -86,6 +86,7 @@ export interface Env {
   // Durable Objects
   CIRCUIT_BREAKER: DurableObjectNamespace;
   CREDIT_LEDGER: DurableObjectNamespace;
+  PROVIDER_CONCURRENCY?: DurableObjectNamespace;
 
   // Environment variables
   ENVIRONMENT: string;

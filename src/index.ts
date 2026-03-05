@@ -9,6 +9,7 @@ import analyticsRoutes from './routes/analytics';
 import responsesRoutes from './routes/responses';
 import { CircuitBreaker } from './durable-objects/circuit-breaker';
 import { CreditLedger } from './durable-objects/credit-ledger';
+import { ProviderConcurrency } from './durable-objects/provider-concurrency';
 import { refreshAllModelCatalogs } from './services/models-catalog';
 import { syncOpenRouterCredits } from './services/credits';
 
@@ -89,3 +90,4 @@ export default {
 // Export Durable Objects
 export { CircuitBreaker };
 export { CreditLedger };
+export { ProviderConcurrency };

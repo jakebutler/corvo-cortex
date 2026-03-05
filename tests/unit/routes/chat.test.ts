@@ -1,7 +1,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { Hono } from 'hono';
 import chatApp from '../../../src/routes/chat';
-import { createMockKV, createMockClientConfig, createMockCircuitBreaker, createMockCreditLedger, TEST_API_KEY } from '../../mocks/env';
+import {
+    createMockKV,
+    createMockClientConfig,
+    createMockCircuitBreaker,
+    createMockCreditLedger,
+    createMockProviderConcurrency,
+    TEST_API_KEY
+} from '../../mocks/env';
 import type { Env, Variables } from '../../../src/types';
 
 // Mock the fetch function for provider calls
@@ -24,6 +31,7 @@ describe('Chat Route - /v1/chat/completions', () => {
             LANGFUSE_SECRET_KEY: 'test-langfuse-secret',
             CIRCUIT_BREAKER: createMockCircuitBreaker(),
             CREDIT_LEDGER: createMockCreditLedger(),
+            PROVIDER_CONCURRENCY: createMockProviderConcurrency(),
             ENVIRONMENT: 'test',
             CREDITS_OPENAI: 'true', // Enable direct OpenAI credits for testing
             ...overrides
@@ -254,6 +262,35 @@ describe('Chat Route - /v1/chat/completions', () => {
     });
 
     describe('Provider Routing', () => {
+        it('should return 429 when Z.ai model concurrency limit is reached', async () => {
+            const envWithConcurrencyRejection = {
+                ...mockEnv,
+                PROVIDER_CONCURRENCY: createMockProviderConcurrency({
+                    acquireStatus: 429,
+                    acquirePayload: { acquired: false, limit: 3, inFlight: 3 }
+                })
+            } as Env;
+
+            const request = new Request('http://localhost/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${TEST_API_KEY}`
+                },
+                body: JSON.stringify({
+                    model: 'glm-4.6',
+                    messages: [{ role: 'user', content: 'Hello' }]
+                })
+            });
+
+            const response = await chatApp.fetch(request, envWithConcurrencyRejection, mockExecutionCtx);
+            const json = await response.json() as { error: string; provider: string };
+
+            expect(response.status).toBe(429);
+            expect(json.error).toBe('Provider concurrency limit reached');
+            expect(json.provider).toBe('z-ai-pro');
+        });
+
         it('should fallback to OpenRouter when direct credits exhausted', async () => {
             // Create env without direct credits
             const envNoCredits = createMockEnv({

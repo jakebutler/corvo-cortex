@@ -36,6 +36,10 @@ import {
   validateStrictSchemaPayload
 } from '../services/schema-validation';
 import { buildCorvoCortexHeaders } from '../utils/corvo-cortex-headers';
+import {
+  acquireProviderConcurrencyLease,
+  releaseProviderConcurrencyLease
+} from '../services/provider-concurrency';
 
 const chatApp = new Hono<{ Bindings: Env; Variables: Variables }>();
 
@@ -536,6 +540,35 @@ async function handleLegacyRequest(
   const adapter = getAdapterForProvider(route.provider);
   const finalBalance = await getCreditBalance(c.env, route.provider);
   const providerRequest = adapter.transformRequest({ ...body, model });
+  const concurrency = await acquireProviderConcurrencyLease(c.env, route.provider, model);
+
+  if (!concurrency.allowed) {
+    const errorPayload = {
+      error: 'Provider concurrency limit reached',
+      provider: route.provider,
+      details: `Z.ai concurrency limit reached for model ${model}: ${concurrency.inFlight}/${concurrency.limit} in-flight`
+    };
+    storeResponseData(c, errorPayload);
+    setCorvoHeadersOnContext(c, {
+      provider: route.provider,
+      model,
+      routeId,
+      fallbackUsed: Boolean(route.fallback),
+      hedgeUsed: false,
+      latencyMs: Date.now() - requestStart
+    });
+    return c.json(errorPayload, 429);
+  }
+
+  let concurrencyLease = concurrency.lease;
+  let leaseReleasedByStreamLifecycle = false;
+
+  const releaseConcurrencyLease = async (): Promise<void> => {
+    if (!concurrencyLease) return;
+    const leaseToRelease = concurrencyLease;
+    concurrencyLease = undefined;
+    await releaseProviderConcurrencyLease(c.env, leaseToRelease);
+  };
 
   try {
     const response = await fetchWithRetry(
@@ -566,6 +599,7 @@ async function handleLegacyRequest(
         && isCreditExhaustionResponse(response.status, errorText)
       ) {
         await markProviderCreditsExhausted(c.env, route.provider);
+        await releaseConcurrencyLease();
         return handleLegacyRequest(c, body, rawBody, client, requestStart, true);
       }
 
@@ -621,24 +655,32 @@ async function handleLegacyRequest(
             });
             await deductCredits(c.env, route.provider, cost);
           },
-          onDone: () => {
+          onDone: async () => {
             storeResponseData(c, {
               stream: true,
               output: streamOutput,
               usage: streamUsage
             });
+            await releaseConcurrencyLease();
             resolveTelemetryCompletion?.();
           },
-          onError: (error) => {
+          onError: async (error) => {
             storeResponseData(c, {
               stream: true,
               output: streamOutput,
               usage: streamUsage,
               error: error instanceof Error ? error.message : 'Stream processing error'
             });
+            await releaseConcurrencyLease();
             resolveTelemetryCompletion?.();
           }
         });
+
+        const contentType = streamingResponse.headers.get('Content-Type') || '';
+        leaseReleasedByStreamLifecycle = contentType.includes('text/event-stream');
+        if (!leaseReleasedByStreamLifecycle) {
+          await releaseConcurrencyLease();
+        }
 
         setCorvoHeadersOnResponse(streamingResponse, {
           provider: route.provider,
@@ -712,6 +754,10 @@ async function handleLegacyRequest(
       latencyMs: Date.now() - requestStart
     });
     return c.json(errorPayload, 500);
+  } finally {
+    if (!leaseReleasedByStreamLifecycle) {
+      await releaseConcurrencyLease();
+    }
   }
 }
 
