@@ -18,6 +18,7 @@ import {
   markProviderCreditsExhausted
 } from '../services/credits';
 import { getAdapterForProvider } from '../utils/transform';
+import { resolveModelAlias } from '../utils/model-aliases';
 import { createStreamingResponseWithUsage } from '../utils/streaming';
 import { fetchWithRetry } from '../utils/retry';
 import { chatCompletionRequestSchema } from '../schemas/chat';
@@ -197,7 +198,7 @@ async function handleHeaderDrivenRequest(
     return c.json(errorPayload, 400);
   }
 
-  const model = hints.requestedModel || body.model || client.defaultModel || 'gpt-4o';
+  const model = resolveModelAlias(hints.requestedModel || body.model || client.defaultModel || 'gpt-4o');
   const routePlan = buildRoutePlan(policy, hints, model);
 
   updateTelemetryMetadata(c, 'unresolved', routePlan.model || model, rawBody, {
@@ -448,7 +449,7 @@ async function handleLegacyRequest(
   requestStart: number,
   hasRetriedCreditFallback = false
 ): Promise<Response> {
-  const model = body.model || client.defaultModel || 'gpt-4o';
+  const model = resolveModelAlias(body.model || client.defaultModel || 'gpt-4o');
   const routeId = createLegacyRouteId();
 
   let route: Awaited<ReturnType<typeof determineProvider>>;

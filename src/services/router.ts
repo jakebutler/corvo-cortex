@@ -72,7 +72,7 @@ export async function determineProvider(
   }
 
   // 3. OpenAI Direct - if credits available
-  if ((model.includes('gpt') || model.startsWith('o1')) && creditsOpenAI) {
+  if ((model.includes('gpt') || /^o\d/.test(model)) && creditsOpenAI) {
     return {
       provider: 'openai-direct',
       url: 'https://api.openai.com/v1/chat/completions',
