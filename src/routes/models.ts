@@ -33,7 +33,8 @@ modelsApp.get('/', async (c) => {
   });
 
   const sourceModels = filtered.length ? filtered : catalogModels;
-  const models = sourceModels.length ? sourceModels.map(model => ({
+  const routable = sourceModels.filter(isAdvertisedModel);
+  const models = routable.length ? routable.map(model => ({
     id: model.id,
     provider: model.provider,
     name: model.name || model.id,
@@ -55,3 +56,15 @@ modelsApp.get('/', async (c) => {
 });
 
 export default modelsApp;
+
+/**
+ * Only advertise models the router can actually route:
+ * - direct entries (provider-native ids) are routable by construction
+ * - openrouter-only entries are only routable with their vendor-prefixed id
+ */
+function isAdvertisedModel(model: { id: string; metadata?: Record<string, unknown> }): boolean {
+  if (model.metadata?.routing === 'openrouter-only') {
+    return model.id.includes('/');
+  }
+  return true;
+}
