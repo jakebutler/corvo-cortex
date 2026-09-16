@@ -1,6 +1,58 @@
 import type { Env } from '../types';
-import { getModelCatalog, type ModelRecord } from './models-catalog';
+import type { ModelRecord } from './models-catalog';
 import { setCreditBalance } from './credits';
+
+const CATALOG_KEY = 'models:digitalocean';
+
+interface StoredModelCatalog {
+  updatedAt: string;
+  models: ModelRecord[];
+}
+
+let catalogRefreshInFlight: Promise<void> | null = null;
+
+async function getStoredCatalog(env: Env): Promise<StoredModelCatalog | null> {
+  if (!env.CORTEX_CONFIG || typeof env.CORTEX_CONFIG.get !== 'function') {
+    return null;
+  }
+  try {
+    return await env.CORTEX_CONFIG.get(CATALOG_KEY, { type: 'json' }) as StoredModelCatalog | null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Cache-aside bootstrap: fetch DO's live catalog and store it when no copy
+ * exists yet (fresh deploy, before the first daily refresh). Single-flight per
+ * isolate. Empty fetches are never stored, so a transient DO failure cannot
+ * poison the deprecation-churn guard.
+ */
+export async function refreshDigitalOceanModelCatalog(env: Env): Promise<StoredModelCatalog | null> {
+  if (catalogRefreshInFlight) {
+    await catalogRefreshInFlight.catch(() => undefined);
+    return getStoredCatalog(env);
+  }
+
+  catalogRefreshInFlight = (async () => {
+    const models = await fetchDigitalOceanModels(env);
+    if (models.length === 0) return;
+    if (!env.CORTEX_CONFIG || typeof env.CORTEX_CONFIG.put !== 'function') return;
+    const catalog: StoredModelCatalog = { updatedAt: new Date().toISOString(), models };
+    try {
+      await env.CORTEX_CONFIG.put(CATALOG_KEY, JSON.stringify(catalog));
+    } catch {
+      // KV write failure leaves us bootstrap-trusting the mapping instead.
+    }
+  })();
+  try {
+    await catalogRefreshInFlight;
+  } finally {
+    catalogRefreshInFlight = null;
+  }
+
+  return getStoredCatalog(env);
+}
 
 export const DIGITALOCEAN_CHAT_URL = 'https://inference.do-ai.run/v1/chat/completions';
 export const DIGITALOCEAN_MODELS_URL = 'https://inference.do-ai.run/v1/models';
@@ -157,17 +209,34 @@ export function mapDigitalOceanModel(model: string, mappings: DigitalOceanModelM
  * the daily refresh tightens the guard afterwards.
  */
 export async function resolveDigitalOceanModel(env: Env, model: string): Promise<string | undefined> {
+  if (isExcludedFromDigitalOcean(model)) {
+    return undefined;
+  }
+
+  let catalog = await getStoredCatalog(env);
+  if (!catalog) {
+    catalog = await refreshDigitalOceanModelCatalog(env);
+  }
+
+  const slugs = new Set((catalog?.models ?? []).map((record) => record.id.toLowerCase()));
+
+  // 1. Identity: the requested id exists as a DO slug — route it directly.
+  const { name } = splitVendorPrefix(model);
+  if (slugs.has(name.toLowerCase())) {
+    return name;
+  }
+
+  // 2. Mapping table: alias-style redirects (client-facing name -> DO slug).
   const mappings = await getDigitalOceanModelMapping(env);
   const mapped = mapDigitalOceanModel(model, mappings);
   if (!mapped) return undefined;
 
-  const catalog = await getModelCatalog(env, 'digitalocean');
-  if (!catalog) {
+  // Deprecation-churn guard against the stored catalog; when no catalog is
+  // available at all (bootstrap), the mapping is trusted.
+  if (!catalog || catalog.models.length === 0) {
     return mapped;
   }
-
-  const slugs = new Set(catalog.models.map((record: ModelRecord) => record.id));
-  return slugs.has(mapped) ? mapped : undefined;
+  return slugs.has(mapped.toLowerCase()) ? mapped : undefined;
 }
 
 export async function fetchDigitalOceanModels(env: Env): Promise<ModelRecord[]> {

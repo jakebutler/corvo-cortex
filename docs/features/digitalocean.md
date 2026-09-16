@@ -31,7 +31,13 @@ Client-facing models map to DO slugs via the KV table `routing:digitalocean-mode
 | `mistral-*` | `mistral-3-14B` |
 | `openai-gpt-oss*`, `gpt-oss-*` | `openai-gpt-oss-120b` |
 
-Every resolved slug is checked against the DO catalog (`models:digitalocean`, refreshed daily) so deprecated slugs fail over to OpenRouter instead of 404-ing. If no catalog has been fetched yet, the mapping is trusted to self-bootstrap.
+Resolution order:
+
+1. **Identity** — if the requested id exists in the DO catalog (`models:digitalocean`), it routes to DO directly. Any model DO currently serves is routable with zero configuration (`qwen3.8-max`, new DO releases, etc.).
+2. **Mapping table** — alias-style redirects for client-facing names that differ from DO slugs (`glm-4.7` → `glm-5.3-flash`).
+3. **Churn guard** — mapped slugs must exist in the stored catalog; if no catalog copy exists yet, the mapping is trusted and the catalog is **lazily bootstrapped** on first use (single-flight, empty fetches never stored).
+
+The catalog copy is refreshed daily by the cron from DO's real `/v1/models` API, so maintenance is automatic: new DO models become routable on their own, deprecated ones fail over to OpenRouter. **OpenAI and Anthropic families are hard-excluded before all of the above** and cannot be re-enabled via the mapping table.
 
 To retarget models (no deploy):
 

@@ -85,9 +85,31 @@ describe('getDigitalOceanModelMapping', () => {
 });
 
 describe('resolveDigitalOceanModel', () => {
-    it('trusts the mapping when no catalog has been fetched yet (bootstrap)', async () => {
+    afterEach(() => {
+        globalThis.fetch = originalFetch;
+        vi.restoreAllMocks();
+    });
+
+    it('bootstraps the catalog lazily on first use and routes identity matches', async () => {
         const env = createDoEnv({ CORTEX_CONFIG: createMockKV() });
+        globalThis.fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+            data: [{ id: 'glm-5.3-flash' }, { id: 'qwen3.8-max' }]
+        }), { status: 200 }));
+
+        // Identity: qwen3.8-max has no mapping entry but exists in the DO catalog.
+        expect(await resolveDigitalOceanModel(env, 'qwen3.8-max')).toBe('qwen3.8-max');
         expect(await resolveDigitalOceanModel(env, 'glm-4.7')).toBe('glm-5.3-flash');
+
+        const stored = await env.CORTEX_CONFIG.get('models:digitalocean', { type: 'json' }) as { models: Array<{ id: string }> };
+        expect(stored.models.map((m) => m.id).sort()).toEqual(['glm-5.3-flash', 'qwen3.8-max']);
+    });
+
+    it('trusts the mapping when catalog bootstrap is unavailable (no key / DO failure)', async () => {
+        const env = createDoEnv({ CORTEX_CONFIG: createMockKV(), DIGITAL_OCEAN_MODEL_ACCESS_KEY: undefined });
+        globalThis.fetch = vi.fn();
+
+        expect(await resolveDigitalOceanModel(env, 'glm-4.7')).toBe('glm-5.3-flash');
+        expect(globalThis.fetch).not.toHaveBeenCalled();
     });
 
     it('rejects mapped models absent from the current catalog (deprecation churn guard)', async () => {
@@ -102,6 +124,20 @@ describe('resolveDigitalOceanModel', () => {
 
         expect(await resolveDigitalOceanModel(env, 'llama-4')).toBeUndefined();
         expect(await resolveDigitalOceanModel(env, 'glm-4.7')).toBe('glm-5.3-flash');
+    });
+
+    it('exclusion wins over identity matches in the catalog', async () => {
+        const env = createDoEnv({
+            CORTEX_CONFIG: createMockKV({
+                'models:digitalocean': {
+                    updatedAt: new Date().toISOString(),
+                    models: [{ id: 'gpt-5.2', provider: 'digitalocean' }, { id: 'claude-sonnet-4-6', provider: 'digitalocean' }]
+                }
+            })
+        });
+
+        expect(await resolveDigitalOceanModel(env, 'gpt-5.2')).toBeUndefined();
+        expect(await resolveDigitalOceanModel(env, 'claude-sonnet-4-6')).toBeUndefined();
     });
 });
 
