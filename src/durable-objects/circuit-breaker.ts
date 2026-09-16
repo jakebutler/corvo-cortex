@@ -4,10 +4,13 @@ import type { CircuitState } from '../types';
  * Circuit Breaker Durable Object
  * Manages provider health state to prevent cascading failures
  *
+ * A single instance owns all providers; state is persisted to DO storage and
+ * reloaded lazily so breaker state survives restarts and hibernation.
+ *
  * States:
  * - CLOSED: Normal operation, requests pass through
  * - OPEN: Provider failing, fail-fast for timeout period
- * - HALF_OPEN: Testing if provider has recovered
+ * - HALF_OPEN: Testing if provider has recovered (at most halfOpenMaxCalls probes)
  */
 export class CircuitBreaker implements DurableObject {
   private state: DurableObjectState;
@@ -16,10 +19,11 @@ export class CircuitBreaker implements DurableObject {
   // Circuit breaker configuration
   private failureThreshold = 5;
   private openTimeout = 60000; // 60 seconds
-  private halfOpenMaxCalls = 1; // Number of calls to test in half-open state
+  private halfOpenMaxCalls = 1; // Number of concurrent probes allowed in half-open state
 
-  // Per-provider state
+  // Per-provider state (lazily hydrated from storage)
   private breakerStates = new Map<string, CircuitBreakerData>();
+  private loaded = false;
 
   constructor(state: DurableObjectState, env: unknown) {
     this.state = state;
@@ -35,19 +39,19 @@ export class CircuitBreaker implements DurableObject {
 
     try {
       if (pathname === '/check') {
-        return this.handleCheck(request);
+        return await this.handleCheck(request);
       }
       if (pathname === '/recordSuccess') {
-        return this.handleRecordSuccess(request);
+        return await this.handleRecordSuccess(request);
       }
       if (pathname === '/recordFailure') {
-        return this.handleRecordFailure(request);
+        return await this.handleRecordFailure(request);
       }
       if (pathname === '/reset') {
-        return this.handleReset(request);
+        return await this.handleReset(request);
       }
       if (pathname === '/status') {
-        return this.handleStatus();
+        return await this.handleStatus();
       }
 
       return new Response('Not Found', { status: 404 });
@@ -64,37 +68,39 @@ export class CircuitBreaker implements DurableObject {
    */
   private async handleCheck(request: Request): Promise<Response> {
     const { provider } = await request.json() as { provider: string };
-    const data = this.getOrCreateState(provider);
+    const data = await this.getOrCreateState(provider);
 
     // Check if we should transition from OPEN to HALF_OPEN
-    if (data.state === 'open' && Date.now() >= data.nextAttemptTime!) {
+    if (data.state === 'open' && data.nextAttemptTime !== null && Date.now() >= data.nextAttemptTime) {
       data.state = 'half-open';
       data.halfOpenCalls = 0;
-      this.saveState(provider, data);
+      await this.saveState(provider, data);
     }
 
     // Fail fast if circuit is OPEN
     if (data.state === 'open') {
-      return new Response(
-        JSON.stringify({
-          allowed: false,
-          reason: 'Circuit breaker is OPEN',
-          state: data.state
-        }),
-        { status: 503, headers: { 'Content-Type': 'application/json' } }
-      );
+      return this.json({
+        allowed: false,
+        reason: 'Circuit breaker is OPEN',
+        state: data.state
+      }, 503);
     }
 
-    // Track the call in HALF_OPEN state
+    // Enforce the probe budget in HALF_OPEN state
     if (data.state === 'half-open') {
+      if ((data.halfOpenCalls || 0) >= this.halfOpenMaxCalls) {
+        return this.json({
+          allowed: false,
+          reason: 'Circuit breaker is HALF_OPEN with the maximum number of probes in flight',
+          state: data.state
+        }, 503);
+      }
+
       data.halfOpenCalls = (data.halfOpenCalls || 0) + 1;
-      this.saveState(provider, data);
+      await this.saveState(provider, data);
     }
 
-    return new Response(
-      JSON.stringify({ allowed: true, state: data.state }),
-      { status: 200, headers: { 'Content-Type': 'application/json' } }
-    );
+    return this.json({ allowed: true, state: data.state });
   }
 
   /**
@@ -102,7 +108,7 @@ export class CircuitBreaker implements DurableObject {
    */
   private async handleRecordSuccess(request: Request): Promise<Response> {
     const { provider } = await request.json() as { provider: string };
-    const data = this.getOrCreateState(provider);
+    const data = await this.getOrCreateState(provider);
 
     if (data.state === 'half-open') {
       // Successfully recovered, close the circuit
@@ -110,17 +116,15 @@ export class CircuitBreaker implements DurableObject {
       data.failureCount = 0;
       data.lastFailureTime = null;
       data.nextAttemptTime = null;
+      data.halfOpenCalls = 0;
     } else if (data.state === 'closed') {
       // Reset failure count on success in closed state
       data.failureCount = 0;
     }
 
-    this.saveState(provider, data);
+    await this.saveState(provider, data);
 
-    return new Response(
-      JSON.stringify({ success: true, state: data.state }),
-      { status: 200, headers: { 'Content-Type': 'application/json' } }
-    );
+    return this.json({ success: true, state: data.state });
   }
 
   /**
@@ -128,23 +132,25 @@ export class CircuitBreaker implements DurableObject {
    */
   private async handleRecordFailure(request: Request): Promise<Response> {
     const { provider } = await request.json() as { provider: string };
-    const data = this.getOrCreateState(provider);
+    const data = await this.getOrCreateState(provider);
 
     data.failureCount++;
     data.lastFailureTime = Date.now();
 
-    // Open the circuit if threshold reached
-    if (data.failureCount >= this.failureThreshold) {
+    if (data.state === 'half-open') {
+      // A failed probe is direct evidence the provider has not recovered
+      data.state = 'open';
+      data.nextAttemptTime = Date.now() + this.openTimeout;
+      data.halfOpenCalls = 0;
+    } else if (data.failureCount >= this.failureThreshold) {
+      // Open the circuit if threshold reached
       data.state = 'open';
       data.nextAttemptTime = Date.now() + this.openTimeout;
     }
 
-    this.saveState(provider, data);
+    await this.saveState(provider, data);
 
-    return new Response(
-      JSON.stringify({ success: true, state: data.state }),
-      { status: 200, headers: { 'Content-Type': 'application/json' } }
-    );
+    return this.json({ success: true, state: data.state });
   }
 
   /**
@@ -152,58 +158,90 @@ export class CircuitBreaker implements DurableObject {
    */
   private async handleReset(request: Request): Promise<Response> {
     const { provider } = await request.json() as { provider: string };
-    const data = this.getOrCreateState(provider);
+    const data = await this.getOrCreateState(provider);
 
     data.state = 'closed';
     data.failureCount = 0;
     data.lastFailureTime = null;
     data.nextAttemptTime = null;
+    data.halfOpenCalls = 0;
 
-    this.saveState(provider, data);
+    await this.saveState(provider, data);
 
-    return new Response(
-      JSON.stringify({ success: true, state: data.state }),
-      { status: 200, headers: { 'Content-Type': 'application/json' } }
-    );
+    return this.json({ success: true, state: data.state });
   }
 
   /**
    * Get status of all circuit breakers
    */
   private async handleStatus(): Promise<Response> {
+    await this.ensureLoaded();
     const status = Array.from(this.breakerStates.values());
 
-    return new Response(
-      JSON.stringify({ breakers: status }),
-      { status: 200, headers: { 'Content-Type': 'application/json' } }
-    );
+    return this.json({ breakers: status });
+  }
+
+  /**
+   * Hydrate in-memory state from DO storage (once per instance lifetime)
+   */
+  private async ensureLoaded(): Promise<void> {
+    if (this.loaded) return;
+
+    const entries = await this.state.storage.list({ prefix: `${STORAGE_KEY_PREFIX}:` });
+    for (const [key, value] of entries) {
+      const provider = key.slice(`${STORAGE_KEY_PREFIX}:`.length);
+      const data = value as CircuitBreakerData;
+      this.breakerStates.set(provider, { ...data, provider });
+    }
+
+    this.loaded = true;
   }
 
   /**
    * Get or create state for a provider
    */
-  private getOrCreateState(provider: string): CircuitBreakerData {
-    if (!this.breakerStates.has(provider)) {
-      this.breakerStates.set(provider, {
-        provider,
-        state: 'closed',
-        failureCount: 0,
-        lastFailureTime: null,
-        nextAttemptTime: null,
-        halfOpenCalls: 0
-      });
-    }
-    return this.breakerStates.get(provider)!;
+  private async getOrCreateState(provider: string): Promise<CircuitBreakerData> {
+    await this.ensureLoaded();
+
+    const existing = this.breakerStates.get(provider);
+    if (existing) return existing;
+
+    const fresh: CircuitBreakerData = {
+      provider,
+      state: 'closed',
+      failureCount: 0,
+      lastFailureTime: null,
+      nextAttemptTime: null,
+      halfOpenCalls: 0
+    };
+    this.breakerStates.set(provider, fresh);
+    return fresh;
   }
 
   /**
    * Persist state to Durable Object storage
    */
-  private saveState(provider: string, data: CircuitBreakerData): void {
+  private async saveState(provider: string, data: CircuitBreakerData): Promise<void> {
     this.breakerStates.set(provider, data);
-    // Persist to DO storage for recovery across restarts
-    this.state.storage.put(`breaker:${provider}`, data);
+    await this.state.storage.put(`${STORAGE_KEY_PREFIX}:${provider}`, data);
   }
+
+  private json(data: unknown, status = 200): Response {
+    return new Response(JSON.stringify(data), {
+      status,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  }
+}
+
+const STORAGE_KEY_PREFIX = 'breaker';
+
+/**
+ * All breaker traffic (checks, records, status, resets) must target this
+ * single DO instance so state and health views agree.
+ */
+export function circuitBreakerInstanceId(): string {
+  return 'circuit-breaker:global';
 }
 
 /**

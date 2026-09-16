@@ -94,6 +94,41 @@ describe('Health Route - /health', () => {
             expect(Array.isArray(json.breakers)).toBe(true);
         });
 
+        it('should return real per-provider states after induced failures', async () => {
+            const stub = mockEnv.CIRCUIT_BREAKER.get(mockEnv.CIRCUIT_BREAKER.idFromName('any'));
+            for (let i = 0; i < 5; i++) {
+                await stub.fetch(new Request('https://circuit-breaker/recordFailure', {
+                    method: 'POST',
+                    body: JSON.stringify({ provider: 'anthropic-direct' })
+                }));
+            }
+            await stub.fetch(new Request('https://circuit-breaker/recordFailure', {
+                method: 'POST',
+                body: JSON.stringify({ provider: 'openai-direct' })
+            }));
+
+            const request = new Request('http://localhost/providers', {
+                method: 'GET',
+                headers: { 'Authorization': `Bearer ${ADMIN_API_KEY}` }
+            });
+
+            const response = await healthApp.fetch(request, mockEnv);
+
+            expect(response.status).toBe(200);
+            const json = await response.json() as {
+                breakers: Array<{ provider: string; state: string; failureCount: number }>;
+            };
+
+            const anthropic = json.breakers.find((b) => b.provider === 'anthropic-direct');
+            const openai = json.breakers.find((b) => b.provider === 'openai-direct');
+            expect(anthropic).toBeDefined();
+            expect(anthropic?.state).toBe('open');
+            expect(anthropic?.failureCount).toBe(5);
+            expect(openai).toBeDefined();
+            expect(openai?.state).toBe('closed');
+            expect(openai?.failureCount).toBe(1);
+        });
+
         it('should return 501 if circuit breaker binding is missing', async () => {
             const envNoBreaker = createMockEnv({ CIRCUIT_BREAKER: undefined });
             const request = new Request('http://localhost/providers', {

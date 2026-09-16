@@ -7,10 +7,25 @@ describe('CircuitBreaker', () => {
   let mockEnv: any;
 
   beforeEach(() => {
+    const store = new Map<string, unknown>();
     mockState = {
       storage: {
-        put: async () => {},
-        get: async () => null
+        put: async (key: string, value: unknown) => {
+          store.set(key, value);
+        },
+        get: async (key: string) => store.get(key) ?? null,
+        delete: async (key: string) => {
+          store.delete(key);
+        },
+        list: async (options?: { prefix?: string }) => {
+          const entries = new Map<string, unknown>();
+          for (const [key, value] of store) {
+            if (!options?.prefix || key.startsWith(options.prefix)) {
+              entries.set(key, value);
+            }
+          }
+          return entries;
+        }
       }
     };
     mockEnv = {};

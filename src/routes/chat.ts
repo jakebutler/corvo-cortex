@@ -47,6 +47,7 @@ import {
   acquireProviderConcurrencyLease,
   releaseProviderConcurrencyLease
 } from '../services/provider-concurrency';
+import { circuitBreakerInstanceId } from '../durable-objects/circuit-breaker';
 
 const chatApp = new Hono<{ Bindings: Env; Variables: Variables }>();
 
@@ -85,7 +86,7 @@ async function checkCircuitBreaker(
     return { allowed: true };
   }
 
-  const stub = env.CIRCUIT_BREAKER.get(env.CIRCUIT_BREAKER.idFromName(provider));
+  const stub = env.CIRCUIT_BREAKER.get(env.CIRCUIT_BREAKER.idFromName(circuitBreakerInstanceId()));
   const response = await stub.fetch(
     new Request('https://circuit-breaker/check', {
       method: 'POST',
@@ -93,12 +94,11 @@ async function checkCircuitBreaker(
     })
   );
 
-  if (!response.ok) {
+  try {
+    return await response.json() as { allowed: boolean; reason?: string };
+  } catch {
     return { allowed: true };
   }
-
-  const data = await response.json() as { allowed: boolean; reason?: string };
-  return data;
 }
 
 /**
@@ -107,7 +107,7 @@ async function checkCircuitBreaker(
 async function recordCircuitBreakerSuccess(env: Env, provider: string): Promise<void> {
   if (!env.CIRCUIT_BREAKER) return;
 
-  const stub = env.CIRCUIT_BREAKER.get(env.CIRCUIT_BREAKER.idFromName(provider));
+  const stub = env.CIRCUIT_BREAKER.get(env.CIRCUIT_BREAKER.idFromName(circuitBreakerInstanceId()));
   await stub.fetch(
     new Request('https://circuit-breaker/recordSuccess', {
       method: 'POST',
@@ -122,7 +122,7 @@ async function recordCircuitBreakerSuccess(env: Env, provider: string): Promise<
 async function recordCircuitBreakerFailure(env: Env, provider: string): Promise<void> {
   if (!env.CIRCUIT_BREAKER) return;
 
-  const stub = env.CIRCUIT_BREAKER.get(env.CIRCUIT_BREAKER.idFromName(provider));
+  const stub = env.CIRCUIT_BREAKER.get(env.CIRCUIT_BREAKER.idFromName(circuitBreakerInstanceId()));
   await stub.fetch(
     new Request('https://circuit-breaker/recordFailure', {
       method: 'POST',
