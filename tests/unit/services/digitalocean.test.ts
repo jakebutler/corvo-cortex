@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
+    isExcludedFromDigitalOcean,
     mapDigitalOceanModel,
     resolveDigitalOceanModel,
     fetchDigitalOceanModels,
@@ -32,16 +33,27 @@ describe('mapDigitalOceanModel', () => {
         expect(mapDigitalOceanModel('GLM-5.3', DEFAULT_DIGITALOCEAN_MODEL_MAPPING)).toBe('glm-5.3');
     });
 
-    it('maps llama, deepseek, mistral, and gpt-oss families', () => {
+    it('maps llama, deepseek, and mistral families', () => {
         expect(mapDigitalOceanModel('llama-4', DEFAULT_DIGITALOCEAN_MODEL_MAPPING)).toBe('llama-4-maverick');
         expect(mapDigitalOceanModel('deepseek-v3', DEFAULT_DIGITALOCEAN_MODEL_MAPPING)).toBe('deepseek-v4.1-flash');
         expect(mapDigitalOceanModel('mistral-large', DEFAULT_DIGITALOCEAN_MODEL_MAPPING)).toBe('mistral-3-14B');
-        expect(mapDigitalOceanModel('openai-gpt-oss-20b', DEFAULT_DIGITALOCEAN_MODEL_MAPPING)).toBe('openai-gpt-oss-120b');
     });
 
     it('returns undefined for unmapped models', () => {
-        expect(mapDigitalOceanModel('gpt-4o', DEFAULT_DIGITALOCEAN_MODEL_MAPPING)).toBeUndefined();
-        expect(mapDigitalOceanModel('claude-sonnet-4-6', DEFAULT_DIGITALOCEAN_MODEL_MAPPING)).toBeUndefined();
+        expect(mapDigitalOceanModel('qwen3.8-max', DEFAULT_DIGITALOCEAN_MODEL_MAPPING)).toBeUndefined();
+    });
+
+    it('NEVER maps OpenAI or Anthropic families to DO (hard exclusion, not KV-overridable)', () => {
+        for (const model of ['gpt-4o', 'gpt-5.2', 'gpt-oss-120b', 'openai-gpt-oss-120b', 'o3', 'o4-mini', 'claude-sonnet-4-6', 'claude-opus-4-6', 'OpenAI/gpt-4o', 'anthropic/claude-sonnet-4-6']) {
+            expect(mapDigitalOceanModel(model, DEFAULT_DIGITALOCEAN_MODEL_MAPPING), model).toBeUndefined();
+            expect(isExcludedFromDigitalOcean(model), model).toBe(true);
+        }
+    });
+
+    it('hard exclusion cannot be bypassed via KV mapping overrides', () => {
+        const hostile = [{ match: 'gpt-', model: 'glm-5.3-flash' }, { match: 'claude', model: 'glm-5.3' }];
+        expect(mapDigitalOceanModel('gpt-4o', hostile)).toBeUndefined();
+        expect(mapDigitalOceanModel('claude-sonnet-4-6', hostile)).toBeUndefined();
     });
 
     it('strips vendor prefixes before matching', () => {

@@ -8,6 +8,21 @@ export const DIGITALOCEAN_BALANCE_URL = 'https://api.digitalocean.com/v2/custome
 
 const MAPPING_CONFIG_KEY = 'routing:digitalocean-models';
 
+/**
+ * Hard policy exclusion: OpenAI and Anthropic model families are NEVER routed
+ * to DigitalOcean — the prepaid DO credits do not apply to them. This cannot
+ * be overridden via the KV mapping table.
+ */
+const EXCLUDED_FAMILY_PREFIXES = ['gpt', 'chatgpt', 'openai-gpt-oss', 'claude'];
+const EXCLUDED_O_SERIES = /^o\d/;
+
+export function isExcludedFromDigitalOcean(model: string): boolean {
+  const { name } = splitVendorPrefix(model);
+  const lowered = name.toLowerCase();
+  if (EXCLUDED_O_SERIES.test(lowered)) return true;
+  return EXCLUDED_FAMILY_PREFIXES.some((prefix) => lowered.startsWith(prefix));
+}
+
 export interface DigitalOceanModelMapping {
   match: string;
   model: string;
@@ -20,9 +35,7 @@ export const DEFAULT_DIGITALOCEAN_MODEL_MAPPING: DigitalOceanModelMapping[] = [
   { match: 'glm-', model: 'glm-5.3-flash' },
   { match: 'llama-', model: 'llama-4-maverick' },
   { match: 'deepseek-', model: 'deepseek-v4.1-flash' },
-  { match: 'mistral-', model: 'mistral-3-14B' },
-  { match: 'openai-gpt-oss', model: 'openai-gpt-oss-120b' },
-  { match: 'gpt-oss-', model: 'openai-gpt-oss-120b' }
+  { match: 'mistral-', model: 'mistral-3-14B' }
 ];
 
 export interface DigitalOceanBalanceSnapshot {
@@ -120,6 +133,10 @@ function splitVendorPrefix(model: string): { vendor?: string; name: string } {
  * unmapped models are never routed to DO.
  */
 export function mapDigitalOceanModel(model: string, mappings: DigitalOceanModelMapping[]): string | undefined {
+  if (isExcludedFromDigitalOcean(model)) {
+    return undefined;
+  }
+
   const { name } = splitVendorPrefix(model);
   const lowered = name.toLowerCase();
 

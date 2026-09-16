@@ -10,6 +10,7 @@ export interface ClientConfig {
   name: string;
   defaultModel: string;
   allowZai: boolean;
+  allowDigitalocean?: boolean;   // Opt-OUT for DO-first routing (default allowed)
   allowedModels?: string[];
   telemetry?: TelemetryMode;
   fallbackStrategy: 'openrouter' | 'fail-fast';
@@ -21,7 +22,7 @@ export interface ClientConfig {
 
 export type RoutingStage = 'week_1' | 'week_n' | 'refine_week_1';
 export type RoutingStrategy = 'speed' | 'balanced' | 'quality';
-export type RoutingProvider = 'fireworks' | 'openrouter';
+export type RoutingProvider = 'fireworks' | 'openrouter' | 'digitalocean';
 export type RequestPriority = 'low' | 'normal' | 'high';
 export type RequestRole = 'primary' | 'hedge' | 'fallback';
 

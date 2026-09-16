@@ -736,6 +736,8 @@ describe('Chat Route - /v1/chat/completions', () => {
             expect(response.headers.get('x-corvo-cortex-latency-ms')).not.toBe('unknown');
         });
 
+    });
+
     describe('Policy model allowlist', () => {
         function createPolicyEnv(policyExtras: Record<string, unknown> = {}) {
             return createMockEnv({
@@ -870,7 +872,6 @@ describe('Chat Route - /v1/chat/completions', () => {
             expect(response.headers.get('x-corvo-cortex-fallback-used')).toBe('true');
             expect(response.headers.get('x-corvo-cortex-cache-hit')).toBe('unknown');
         });
-    });
 
     describe('Spend Guardrails', () => {
         it('returns 413 when the request body exceeds the configured size limit', async () => {
@@ -1204,5 +1205,71 @@ describe('Chat Route - /v1/chat/completions', () => {
             expect(ledger.balance).toBeLessThan(5);
             expect(ledger.balance).toBeGreaterThanOrEqual(0);
         });
+
+        it('routes header-mode requests through DigitalOcean when preferred', async () => {
+            const env = createDoRouteEnv();
+            globalThis.fetch = doUpstreamMock({
+                body: {
+                    id: 'chatcmpl-do-h',
+                    object: 'chat.completion',
+                    created: Math.floor(Date.now() / 1000),
+                    model: 'glm-5.3-flash',
+                    choices: [{ index: 0, message: { role: 'assistant', content: 'DO header win' }, finish_reason: 'stop' }],
+                    usage: { prompt_tokens: 9, completion_tokens: 6, total_tokens: 15 }
+                }
+            });
+
+            const request = new Request('http://localhost/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${TEST_API_KEY}`,
+                    'x-kinisi-llm-stage': 'week_n',
+                    'x-kinisi-routing-strategy': 'speed',
+                    'x-kinisi-provider-prefer': 'digitalocean,openrouter',
+                    'x-kinisi-model': 'glm-4.7'
+                },
+                body: JSON.stringify({ messages: [{ role: 'user', content: 'Generate week plan JSON' }] })
+            });
+
+            const response = await chatApp.fetch(request, env, mockExecutionCtx);
+
+            expect(response.status).toBe(200);
+            expect(response.headers.get('x-corvo-cortex-provider')).toBe('digitalocean');
+            expect(response.headers.get('x-corvo-cortex-model')).toBe('glm-5.3-flash');
+            expect(globalThis.fetch).toHaveBeenCalledWith(
+                expect.stringContaining('inference.do-ai.run'),
+                expect.anything()
+            );
+        });
+
+        it('honours x-kinisi-provider-block to skip DigitalOcean', async () => {
+            const env = createDoRouteEnv();
+            globalThis.fetch = doUpstreamMock();
+
+            const request = new Request('http://localhost/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${TEST_API_KEY}`,
+                    'x-kinisi-llm-stage': 'week_n',
+                    'x-kinisi-routing-strategy': 'speed',
+                    'x-kinisi-provider-prefer': 'digitalocean,openrouter',
+                    'x-kinisi-provider-block': 'digitalocean',
+                    'x-kinisi-model': 'glm-4.7'
+                },
+                body: JSON.stringify({ messages: [{ role: 'user', content: 'Generate week plan JSON' }] })
+            });
+
+            const response = await chatApp.fetch(request, env, mockExecutionCtx);
+
+            expect(response.status).toBe(200);
+            expect(response.headers.get('x-corvo-cortex-provider')).toBe('openrouter');
+            expect(globalThis.fetch).not.toHaveBeenCalledWith(
+                expect.stringContaining('inference.do-ai.run'),
+                expect.anything()
+            );
+        });
+
     });
 });

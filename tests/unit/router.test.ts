@@ -161,6 +161,13 @@ describe('determineProvider', () => {
       expect(route.provider).toBe('z-ai-pro');
     });
 
+    it('honours the per-client allowDigitalocean opt-out', async () => {
+      const optedOut = { ...mockClient, allowDigitalocean: false };
+      const route = await determineProvider('glm-4.7', optedOut, doEnv());
+
+      expect(route.provider).toBe('z-ai-pro');
+    });
+
     it('does not route unmapped models to DO (falls back to OpenRouter)', async () => {
       const route = await determineProvider('gpt-4o', mockClient, doEnv({ CREDITS_OPENAI: undefined }));
 

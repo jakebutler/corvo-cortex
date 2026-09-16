@@ -14,6 +14,7 @@ export const DEFAULT_ROUTING_POLICY: RoutingPolicy = {
   matrix: {
     week_1: {
       speed: [
+        { provider: 'digitalocean', modelProfile: 'fast_json_model' },
         { provider: 'fireworks', modelProfile: 'fast_json_model' },
         { provider: 'openrouter', modelProfile: 'fast_json_model' },
         { provider: 'openrouter', modelProfile: 'safe_json_model' }
@@ -31,6 +32,7 @@ export const DEFAULT_ROUTING_POLICY: RoutingPolicy = {
     },
     week_n: {
       speed: [
+        { provider: 'digitalocean', modelProfile: 'fast_json_model' },
         { provider: 'fireworks', modelProfile: 'fast_json_model' },
         { provider: 'openrouter', modelProfile: 'fast_json_model' },
         { provider: 'openrouter', modelProfile: 'safe_json_model' }

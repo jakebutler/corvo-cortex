@@ -228,3 +228,10 @@ Corvo Cortex now returns deterministic metadata headers on both success and erro
 - `x-corvo-cortex-latency-ms`
 
 Unavailable values are returned as `unknown`.
+
+
+---
+
+## Header-Mode DigitalOcean
+
+`digitalocean` is a valid provider in every header/policy surface (`x-kinisi-provider-prefer/allow/block`, policy matrix entries). DO-led speed chains are the default for `week_1`/`week_n` speed. DO candidates resolve the requested model through the DO mapping table (unmapped → skipped non-retriably) and honor `CREDITS_DIGITALOCEAN` plus the per-client `allowDigitalocean` opt-out.

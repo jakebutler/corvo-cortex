@@ -75,7 +75,7 @@ export async function determineProvider(
   // -1. DigitalOcean preemption (broadest credit-funded tier, above Fireworks):
   // config-driven mapping + catalog churn guard + credit gate. Unmapped models
   // are never routed to DO.
-  if (env.CREDITS_DIGITALOCEAN === 'true' && routesDirect('digitalocean')) {
+  if (env.CREDITS_DIGITALOCEAN === 'true' && client.allowDigitalocean !== false && routesDirect('digitalocean')) {
     const doModel = await resolveDigitalOceanModel(env, name);
     if (doModel) {
       const balance = await getCreditBalance(env, 'digitalocean');

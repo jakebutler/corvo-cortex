@@ -26,6 +26,7 @@ import { resolveModelAliasFromEnv } from '../utils/model-aliases';
 import { createStreamingResponseWithUsage } from '../utils/streaming';
 import { fetchWithRetry } from '../utils/retry';
 import { createAbortHandle } from '../utils/abort';
+import { DIGITALOCEAN_CHAT_URL, resolveDigitalOceanModel } from '../services/digitalocean';
 import { createChatCompletionRequestSchema, ChatCompletionRequest } from '../schemas/chat';
 import { chatCompletionResponseSchema } from '../schemas/response';
 import { parseKinisiRoutingHints } from '../services/routing-hints';
@@ -279,6 +280,21 @@ async function handleHeaderDrivenRequest(
   const executionResult = await executeRoutePlan<unknown>({
     plan: routePlan,
     attempt: async (candidate, context) => {
+      const doEligible = candidate.provider === 'digitalocean'
+        && c.env.CREDITS_DIGITALOCEAN === 'true'
+        && client.allowDigitalocean !== false;
+      let candidateModel = candidate.model;
+      if (candidate.provider === 'digitalocean') {
+        if (!doEligible) {
+          return createFailureResult('upstream_4xx', 'DigitalOcean routing disabled', false);
+        }
+        const doModel = await resolveDigitalOceanModel(c.env, candidate.model);
+        if (!doModel) {
+          return createFailureResult('upstream_4xx', 'Model not mapped to DigitalOcean', false);
+        }
+        candidateModel = doModel;
+      }
+
       const route = resolveHeaderModeRoute(candidate.provider, c.env);
 
       const circuitCheck = await checkCircuitBreaker(c.env, route.provider);
@@ -296,7 +312,7 @@ async function handleHeaderDrivenRequest(
         const estimate = await estimateRequestMaxCost({
           env: c.env,
           provider: route.provider,
-          model: candidate.model,
+          model: candidateModel,
           input: body.messages,
           maxTokens: body.max_tokens
         });
@@ -321,7 +337,7 @@ async function handleHeaderDrivenRequest(
       };
 
       const adapter = getAdapterForProvider(route.provider);
-      const providerRequest = adapter.transformRequest({ ...body, model: candidate.model });
+      const providerRequest = adapter.transformRequest({ ...body, model: candidateModel });
 
       let response: Response;
       try {
@@ -355,7 +371,7 @@ async function handleHeaderDrivenRequest(
         claimOrReleaseReservation();
         return createSuccessResult({
           provider: candidate.provider,
-          model: candidate.model,
+          model: candidateModel,
           payload: response,
           cacheHit,
           ttftMs
@@ -369,13 +385,13 @@ async function handleHeaderDrivenRequest(
         if (reservationId) void releaseCreditsReservation(c.env, route.provider, reservationId);
         throw error;
       }
-      const transformed = adapter.transformResponse(upstreamJson, candidate.model);
+      const transformed = adapter.transformResponse(upstreamJson, candidateModel);
 
       claimOrReleaseReservation();
 
       return createSuccessResult({
         provider: candidate.provider,
-        model: candidate.model,
+        model: candidateModel,
         payload: transformed,
         cacheHit,
         ttftMs
@@ -1054,6 +1070,17 @@ async function handleLegacyRequest(
 }
 
 function resolveHeaderModeRoute(provider: RoutingProvider, env: Env): ProviderRouteConfig {
+  if (provider === 'digitalocean') {
+    return {
+      provider: 'digitalocean',
+      url: DIGITALOCEAN_CHAT_URL,
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${env.DIGITAL_OCEAN_MODEL_ACCESS_KEY}`
+      }
+    };
+  }
+
   if (provider === 'fireworks') {
     return {
       provider: 'fireworks',

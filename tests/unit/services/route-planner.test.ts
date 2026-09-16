@@ -24,6 +24,19 @@ describe('buildRoutePlan', () => {
     expect(plan.candidates[0].model).toBe('gpt-5-mini');
   });
 
+  it('leads speed chains with digitalocean (DO-first policy)', () => {
+    const plan = buildRoutePlan(DEFAULT_ROUTING_POLICY, {
+      ...baseHints,
+      stage: 'week_n',
+      strategy: 'speed'
+    });
+
+    expect(plan.candidates[0].provider).toBe('digitalocean');
+    expect(plan.candidates[1].provider).toBe('fireworks');
+    expect(plan.candidates[2].provider).toBe('openrouter');
+    expect(plan.candidates[3].provider).toBe('openrouter');
+  });
+
   it('respects explicit provider preference order', () => {
     const plan = buildRoutePlan(DEFAULT_ROUTING_POLICY, {
       ...baseHints,
