@@ -112,7 +112,8 @@ CREDITS_OPENAI = "true"
 CREDITS_MINIMAX = "true"
 LANGFUSE_BASE_URL = "https://us.cloud.langfuse.com"
 # CORS allowlist: browsers may only call the gateway from these origins.
-# Extend with the deployed app origins (e.g. https://app.kinisi.example).
+# Native mobile clients (Kinisi Mobile) are not affected by CORS. Add web app
+# origins here if browser-based clients are introduced.
 ALLOWED_ORIGINS = "https://cortex.corvolabs.com"
 
 # Preview deployment (staging): separate worker name, shared preview KV namespaces.
