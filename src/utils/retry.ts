@@ -2,18 +2,25 @@
  * Retry utilities with exponential backoff
  */
 
+import { abortError } from './abort';
+
 export interface RetryOptions {
   maxRetries?: number;
   baseDelay?: number;
   maxDelay?: number;
   retryableStatuses?: number[];
   onRetry?: (attempt: number, error: Error) => void;
+  /**
+   * Abort signal threaded into every attempt and honored between retries
+   * (client disconnects, request-scoped timeouts). Aborts never retry.
+   */
+  signal?: NonNullable<RequestInit['signal']>;
 }
 
 /**
  * Default retry configuration
  */
-const DEFAULT_RETRY_OPTIONS: Required<RetryOptions> = {
+const DEFAULT_RETRY_OPTIONS = {
   maxRetries: 3,
   baseDelay: 100,
   maxDelay: 10000,
@@ -69,9 +76,17 @@ export async function fetchWithRetry(
   const opts = { ...DEFAULT_RETRY_OPTIONS, ...retryOpts };
   let lastError: Error | null = null;
 
+  const throwIfAborted = (): void => {
+    if (opts.signal?.aborted) {
+      throw abortError();
+    }
+  };
+
+  throwIfAborted();
+
   for (let attempt = 0; attempt <= opts.maxRetries; attempt++) {
     try {
-      const response = await fetch(url, options);
+      const response = await fetch(url, { ...options, signal: opts.signal });
 
       // Check if response status is retryable
       if (response.ok || !isRetryableStatus(response.status, opts.retryableStatuses)) {
@@ -93,12 +108,13 @@ export async function fetchWithRetry(
       // Wait before retrying
       const delay = calculateDelay(attempt, opts.baseDelay, opts.maxDelay);
       await new Promise(resolve => setTimeout(resolve, delay));
+      throwIfAborted();
 
     } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
 
-      // Don't retry if error is not retryable or this was the last attempt
-      if (!isRetryableError(error) || attempt === opts.maxRetries) {
+      // Aborts (client disconnects, timeouts) are never retried
+      if (lastError.name === 'AbortError' || !isRetryableError(error) || attempt === opts.maxRetries) {
         throw lastError;
       }
 
@@ -108,6 +124,7 @@ export async function fetchWithRetry(
       // Wait before retrying
       const delay = calculateDelay(attempt, opts.baseDelay, opts.maxDelay);
       await new Promise(resolve => setTimeout(resolve, delay));
+      throwIfAborted();
     }
   }
 

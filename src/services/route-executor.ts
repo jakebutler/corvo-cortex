@@ -84,6 +84,7 @@ interface CandidateAttemptResult<TPayload> {
 
 interface AbortSignalLike {
   aborted: boolean;
+  addEventListener?: (type: 'abort', listener: () => void) => void;
 }
 
 interface AbortControllerLike {
@@ -115,7 +116,6 @@ export async function executeRoutePlan<TPayload>(
   if (plan.hedge.enabled && plan.requestRole === 'primary' && plan.candidates.length >= 2) {
     const hedgedResult = await runHedged(options, startedAt);
     allAttempts.push(...hedgedResult.attempts);
-
     if (hedgedResult.success) {
       return {
         ok: true,
@@ -211,7 +211,11 @@ async function runHedged<TPayload>(
   const primaryCandidate = options.plan.candidates[0];
   const hedgeCandidate = options.plan.candidates[1];
 
-  const primaryPromise = runCandidateWithRetry(options, primaryCandidate, 0, 'primary', startedAt);
+  // One leg controller per hedge leg: the loser is aborted once a winner emerges.
+  const primaryLeg = createAbortController();
+  const hedgeLeg = createAbortController();
+
+  const primaryPromise = runCandidateWithRetry(options, primaryCandidate, 0, 'primary', startedAt, primaryLeg.signal);
 
   const first = await Promise.race([
     primaryPromise.then(result => ({ kind: 'primary' as const, result })),
@@ -219,6 +223,8 @@ async function runHedged<TPayload>(
   ]);
 
   if (first.kind === 'primary') {
+    // The hedge leg never started; nothing to abort but make it inert anyway.
+    hedgeLeg.abort();
     attempts.push(...first.result.attempts);
     if (first.result.success) {
       return {
@@ -238,33 +244,43 @@ async function runHedged<TPayload>(
     };
   }
 
-  const hedgePromise = runCandidateWithRetry(options, hedgeCandidate, 1, 'hedge', startedAt);
+  const hedgePromise = runCandidateWithRetry(options, hedgeCandidate, 1, 'hedge', startedAt, hedgeLeg.signal);
+
 
   const pending = new Map<
     'primary' | 'hedge',
-    Promise<{ role: 'primary' | 'hedge'; result: CandidateAttemptResult<TPayload> }>
+    { role: 'primary' | 'hedge'; leg: AbortControllerLike; result: Promise<{ role: 'primary' | 'hedge'; result: CandidateAttemptResult<TPayload> }> }
   >([
-    ['primary', primaryPromise.then(result => ({ role: 'primary' as const, result }))],
-    ['hedge', hedgePromise.then(result => ({ role: 'hedge' as const, result }))]
+    ['primary', { role: 'primary', leg: primaryLeg, result: primaryPromise.then(result => ({ role: 'primary' as const, result })) }],
+    ['hedge', { role: 'hedge', leg: hedgeLeg, result: hedgePromise.then(result => ({ role: 'hedge' as const, result })) }]
   ]);
 
+  let winner: HedgedSuccess<TPayload> | undefined;
   while (pending.size > 0) {
-    const raced = await Promise.race(Array.from(pending.values()));
-    pending.delete(raced.role);
+    const racedEntry = await Promise.race(Array.from(pending.values()).map(entry => entry.result.then(r => ({ entry, result: r }))));
+    pending.delete(racedEntry.entry.role);
 
-    attempts.push(...raced.result.attempts);
+    attempts.push(...racedEntry.result.result.attempts);
 
-    if (raced.result.success) {
-      return {
-        success: {
-          ...raced.result.success,
-          candidateIndex: raced.role === 'primary' ? 0 : 1,
-          role: raced.role
-        },
-        attempts,
-        hedgeUsed: true
+    if (racedEntry.result.result.success && !winner) {
+      winner = {
+        ...racedEntry.result.result.success,
+        candidateIndex: racedEntry.entry.role === 'primary' ? 0 : 1,
+        role: racedEntry.entry.role
       };
+      // Abort all remaining legs so losing upstream calls stop billing.
+      for (const entry of pending.values()) {
+        entry.leg.abort();
+      }
     }
+  }
+
+  if (winner) {
+    return {
+      success: winner,
+      attempts,
+      hedgeUsed: true
+    };
   }
 
   return {
@@ -278,11 +294,25 @@ async function runCandidateWithRetry<TPayload>(
   candidate: PlannedRouteCandidate,
   candidateIndex: number,
   role: AttemptContext['role'],
-  startedAt: number
+  startedAt: number,
+  legSignal?: AbortSignalLike
 ): Promise<CandidateAttemptResult<TPayload>> {
   const attempts: AttemptRecord[] = [];
 
   for (let attemptIndex = 0; attemptIndex <= options.plan.retryPolicy.maxRetries; attemptIndex++) {
+    if (legSignal?.aborted) {
+      attempts.push({
+        candidateIndex,
+        provider: candidate.provider,
+        model: candidate.model,
+        role,
+        reason: 'timeout',
+        message: 'leg aborted',
+        success: false
+      });
+      return { attempts };
+    }
+
     const elapsed = Date.now() - startedAt;
     const remainingBudget = options.plan.maxLatencyMs - elapsed;
 
@@ -300,6 +330,9 @@ async function runCandidateWithRetry<TPayload>(
     }
 
     const controller = createAbortController();
+    if (legSignal?.addEventListener && legSignal.aborted === false) {
+      legSignal.addEventListener('abort', () => controller.abort());
+    }
     const timeoutId = setTimeout(() => controller.abort(), remainingBudget);
 
     try {
@@ -422,7 +455,8 @@ function classifyUnknownFailure(error: unknown): AttemptFailure {
 
 function calculateBackoffDelay(attempt: number, baseDelayMs: number, maxDelayMs: number): number {
   const exponential = baseDelayMs * Math.pow(2, attempt);
-  return Math.min(exponential, maxDelayMs);
+  const jitter = Math.random() * 0.25 * exponential;
+  return Math.min(exponential + jitter, maxDelayMs);
 }
 
 function sleep(ms: number): Promise<void> {
