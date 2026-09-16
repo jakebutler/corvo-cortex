@@ -85,6 +85,16 @@ npx wrangler kv key put --namespace-id=<CORTEX_CONFIG_ID> "pricing:digitalocean"
 
 ---
 
+## Responses API (`/v1/responses`)
+
+`POST /v1/responses` routes to DO's Responses API (`https://inference.do-ai.run/v1/responses`) when the requested model maps via the DO mapping table and `CREDITS_DIGITALOCEAN=true`; all other models go to Fireworks. The same guardrails (body cap, `max_output_tokens` ceiling, allowlist, reserve/settle, unified headers) apply on both paths.
+
+## Scope decisions (Phase 4)
+
+- **Claude-on-DO is excluded by policy.** Per operator directive, OpenAI and Anthropic model families are never routed to DO (the prepaid DO credits do not apply), so the previously considered "Claude via DO when the Anthropic ledger is dry" option is off the table.
+- **Batch inference** (`/v1/batches`, up to 50% discount) is not implemented — no async batch workloads today; revisit when one exists.
+- **DO Inference Router evaluation**: DO's policy-based/cache-aware router could replace parts of the internal policy engine, but the gateway's KV-driven matrix + header hints already cover current needs. Re-evaluate if cross-provider caching becomes a priority.
+
 ## Notes
 
 - `max_tokens`: DO deprecates it in favor of `max_completion_tokens` — currently passed through as `max_tokens` (still accepted); revisit if warnings appear.

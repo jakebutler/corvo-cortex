@@ -301,4 +301,70 @@ describe('Responses Route - /v1/responses', () => {
         expect(logged).toContain('fw-internal.edge.example');
         consoleErrorSpy.mockRestore();
     });
+
+    it('routes mapped models to DigitalOcean Responses when enabled', async () => {
+        const doEnv = createMockEnv({
+            CREDITS_DIGITALOCEAN: 'true',
+            DIGITAL_OCEAN_MODEL_ACCESS_KEY: 'do-key'
+        });
+        globalThis.fetch = vi.fn().mockImplementation(async (url: string) => {
+            if (url.includes('inference.do-ai.run')) {
+                return new Response(JSON.stringify({
+                    id: 'resp_do_1',
+                    object: 'response',
+                    model: 'glm-5.3-flash',
+                    output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'DO responses' }] }],
+                    usage: { prompt_tokens: 8, completion_tokens: 4, total_tokens: 12 }
+                }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+            }
+            return new Response('Not found', { status: 404 });
+        });
+
+        const request = new Request('http://localhost/', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${TEST_API_KEY}`
+            },
+            body: JSON.stringify({ model: 'glm-5.3-flash', input: 'Hello' })
+        });
+
+        const response = await responsesApp.fetch(request, doEnv, mockExecutionCtx);
+
+        expect(response.status).toBe(200);
+        expect(response.headers.get('x-corvo-cortex-provider')).toBe('digitalocean');
+        expect(response.headers.get('x-corvo-cortex-model')).toBe('glm-5.3-flash');
+
+        const upstreamCall = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls
+            .find((call) => String(call[0]).includes('inference.do-ai.run'));
+        expect(upstreamCall).toBeDefined();
+        const upstreamBody = JSON.parse(upstreamCall![1].body as string);
+        expect(upstreamBody.model).toBe('glm-5.3-flash');
+        const authHeader = (upstreamCall![1].headers as Record<string, string>)['Authorization'];
+        expect(authHeader).toBe('Bearer do-key');
+    });
+
+    it('keeps Fireworks for models unmapped on DigitalOcean', async () => {
+        const doEnv = createMockEnv({
+            CREDITS_DIGITALOCEAN: 'true',
+            DIGITAL_OCEAN_MODEL_ACCESS_KEY: 'do-key'
+        });
+
+        const request = new Request('http://localhost/', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${TEST_API_KEY}`
+            },
+            body: JSON.stringify({
+                model: 'accounts/fireworks/models/llama-v3p1-8b-instruct',
+                input: 'Hello'
+            })
+        });
+
+        const response = await responsesApp.fetch(request, doEnv, mockExecutionCtx);
+
+        expect(response.status).toBe(200);
+        expect(response.headers.get('x-corvo-cortex-provider')).toBe('fireworks');
+    });
 });

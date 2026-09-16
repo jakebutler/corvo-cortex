@@ -20,6 +20,7 @@ import { estimateCostFromUsage, estimateRequestMaxCost } from '../services/prici
 import { createStreamingResponseWithUsage } from '../utils/streaming';
 import { fetchWithRetry } from '../utils/retry';
 import { circuitBreakerInstanceId } from '../durable-objects/circuit-breaker';
+import { resolveDigitalOceanModel } from '../services/digitalocean';
 import { buildUpstreamErrorEnvelope, classifyUnknownUpstreamError, logUpstreamError, logUpstreamException } from '../utils/error-sanitizer';
 import { createAbortHandle } from '../utils/abort';
 
@@ -134,8 +135,11 @@ responsesApp.post('/', async (c) => {
     return c.json(errorPayload, 400);
   }
 
-  const provider: LLMProvider = 'fireworks';
-  updateTelemetryMetadata(c, provider, model, rawBody);
+  const doModel = c.env.CREDITS_DIGITALOCEAN === 'true'
+    ? await resolveDigitalOceanModel(c.env, model)
+    : undefined;
+  const provider: LLMProvider = doModel ? 'digitalocean' : 'fireworks';
+  updateTelemetryMetadata(c, provider, doModel ?? model, rawBody);
 
   const circuitCheck = await checkCircuitBreaker(c.env, provider);
   if (!circuitCheck.allowed) {
@@ -209,14 +213,24 @@ responsesApp.post('/', async (c) => {
     }
   };
 
-  const route = {
-    provider,
-    url: 'https://api.fireworks.ai/inference/v1/responses',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${c.env.FIREWORKS_API_KEY}`
-    }
-  };
+  const route = provider === 'digitalocean'
+    ? {
+        provider,
+        url: 'https://inference.do-ai.run/v1/responses',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${c.env.DIGITAL_OCEAN_MODEL_ACCESS_KEY}`
+        }
+      }
+    : {
+        provider,
+        url: 'https://api.fireworks.ai/inference/v1/responses',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${c.env.FIREWORKS_API_KEY}`
+        }
+      };
+  const wireModel = doModel ?? model;
 
   const upstreamController = createAbortHandle();
   const upstreamTimeout = setTimeout(() => upstreamController?.abort(), DEFAULT_PROVIDER_TIMEOUT_MS);
@@ -226,7 +240,7 @@ responsesApp.post('/', async (c) => {
       {
         method: 'POST',
         headers: route.headers,
-        body: JSON.stringify(body)
+        body: JSON.stringify({ ...body, model: wireModel })
       },
       {
         maxRetries: 3,
@@ -247,7 +261,7 @@ responsesApp.post('/', async (c) => {
 
       const errorText = await response.text();
       logUpstreamError(route.provider, response.status, errorText);
-      updateTelemetryMetadata(c, route.provider, model, rawBody, {
+      updateTelemetryMetadata(c, route.provider, wireModel, rawBody, {
         upstream_error: errorText.slice(0, 2000)
       });
       const errorPayload = {
@@ -288,7 +302,7 @@ responsesApp.post('/', async (c) => {
             const cost = await estimateCostFromUsage({
               env: c.env,
               provider,
-              model,
+              model: wireModel,
               promptTokens: usage.prompt_tokens || 0,
               completionTokens: usage.completion_tokens || 0
             });
@@ -323,7 +337,7 @@ responsesApp.post('/', async (c) => {
         });
         const streamHeaders = buildCorvoCortexHeaders({
           provider,
-          model,
+          model: wireModel,
           fallbackUsed: false,
           hedgeUsed: false,
           latencyMs: Date.now() - requestStart
@@ -353,7 +367,7 @@ responsesApp.post('/', async (c) => {
       const cost = await estimateCostFromUsage({
         env: c.env,
         provider,
-        model,
+        model: wireModel,
         promptTokens: responseData.usage.prompt_tokens || 0,
         completionTokens: responseData.usage.completion_tokens || 0
       });
@@ -363,7 +377,7 @@ responsesApp.post('/', async (c) => {
       await settleReservation(0);
     }
 
-    setCorvoHeaders(c, { provider, model, fallbackUsed: false, hedgeUsed: false, latencyMs: Date.now() - requestStart });
+    setCorvoHeaders(c, { provider, model: wireModel, fallbackUsed: false, hedgeUsed: false, latencyMs: Date.now() - requestStart });
     c.header('X-Corvo-Provider', provider);
     c.header('X-Corvo-Fallback', 'false');
 
