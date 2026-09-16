@@ -531,6 +531,97 @@ describe('Chat Route - /v1/chat/completions', () => {
             expect(response.headers.get('x-corvo-cortex-latency-ms')).not.toBe('unknown');
         });
 
+    describe('Policy model allowlist', () => {
+        function createPolicyEnv(policyExtras: Record<string, unknown> = {}) {
+            return createMockEnv({
+                CORTEX_CONFIG: createMockKV({
+                    [`routing:kinisi-hints:test`]: {
+                        version: 'v1',
+                        enabled: true,
+                        modelProfiles: {
+                            fast_json_model: 'accounts/fireworks/models/llama-v3p1-8b-instruct',
+                            balanced_json_model: 'openai/gpt-5-mini',
+                            quality_json_model: 'openai/gpt-5',
+                            safe_json_model: 'openai/gpt-5-mini'
+                        },
+                        matrix: {
+                            week_n: {
+                                balanced: [
+                                    { provider: 'openrouter', modelProfile: 'balanced_json_model' }
+                                ]
+                            }
+                        },
+                        hedge: { week_n_speed: false, week_1_speed: false, delayMs: 100 },
+                        retryPolicies: {
+                            speed: { maxRetries: 0, baseDelayMs: 10, maxDelayMs: 50 },
+                            balanced: { maxRetries: 0, baseDelayMs: 10, maxDelayMs: 50 },
+                            quality: { maxRetries: 0, baseDelayMs: 10, maxDelayMs: 50 }
+                        },
+                        latencyBudgetsMs: { week_1: 8000, week_n: 8000, refine_week_1: 8000 },
+                        ...policyExtras
+                    }
+                })
+            });
+        }
+
+        function headerRequest(model?: string): Request {
+            return new Request('http://localhost/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${TEST_API_KEY}`,
+                    'x-kinisi-llm-stage': 'week_n',
+                    'x-kinisi-routing-strategy': 'balanced',
+                    ...(model ? { 'x-kinisi-model': model } : {})
+                },
+                body: JSON.stringify({
+                    messages: [{ role: 'user', content: 'Generate week plan JSON' }]
+                })
+            });
+        }
+
+        it('falls back to the policy profile when the pinned model is outside the allowlist', async () => {
+            const policyEnv = createPolicyEnv({ allowedModels: ['gpt-5-mini', 'glm-*'] });
+
+            const response = await chatApp.fetch(headerRequest('gpt-5-pro'), policyEnv, mockExecutionCtx);
+
+            expect(response.status).toBe(200);
+            const upstreamCall = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls
+                .find((call) => String(call[0]).includes('openrouter.ai'));
+            expect(upstreamCall).toBeDefined();
+            const upstreamBody = JSON.parse(upstreamCall![1].body as string);
+            expect(upstreamBody.model).toBe('openai/gpt-5-mini');
+        });
+
+        it('honors a pinned model inside the policy allowlist', async () => {
+            const policyEnv = createPolicyEnv({ allowedModels: ['gpt-5-mini', 'glm-*'] });
+
+            const response = await chatApp.fetch(headerRequest('glm-5.3-flash'), policyEnv, mockExecutionCtx);
+
+            expect(response.status).toBe(200);
+            const upstreamCall = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls
+                .find((call) => String(call[0]).includes('openrouter.ai'));
+            expect(upstreamCall).toBeDefined();
+            const upstreamBody = JSON.parse(upstreamCall![1].body as string);
+            expect(upstreamBody.model).toBe('glm-5.3-flash');
+        });
+
+        it('returns 403 when pinning is rejected by allowClientModelPinning: false', async () => {
+            const policyEnv = createPolicyEnv({
+                allowedModels: ['gpt-5-mini'],
+                allowClientModelPinning: false
+            });
+
+            const response = await chatApp.fetch(headerRequest('gpt-5-pro'), policyEnv, mockExecutionCtx);
+
+            expect(response.status).toBe(403);
+            const json = await response.json() as { error: { class: string; message: string } };
+            expect(json.error.class).toBe('forbidden');
+            expect(json.error.message).toContain('gpt-5-pro');
+            expect(globalThis.fetch).not.toHaveBeenCalledWith(expect.stringContaining('openrouter.ai'), expect.anything());
+        });
+    });
+
         it('returns 422 schema_invalid and deterministic metadata when all strict-schema candidates fail', async () => {
             const request = new Request('http://localhost/', {
                 method: 'POST',

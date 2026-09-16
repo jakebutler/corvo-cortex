@@ -8,6 +8,7 @@ export interface ClientConfig {
   name: string;
   defaultModel: string;
   allowZai: boolean;
+  allowedModels?: string[];
   fallbackStrategy: 'openrouter' | 'fail-fast';
   rateLimit: {
     requestsPerMinute: number;

@@ -113,6 +113,33 @@ Request: model="claude-3-5-sonnet"
 
 ---
 
+## Policy Model Allowlist
+
+The routing policy supports a policy-level model allowlist that constrains client-pinned models (`x-kinisi-model` header or body `model`):
+
+```json
+{
+  "version": "v2",
+  "enabled": true,
+  "allowedModels": ["gpt-5-mini", "glm-*"],
+  "allowClientModelPinning": false,
+  "..."
+}
+```
+
+Entry semantics (shared with the per-client `allowedModels`): exact ids, trailing-`*` prefix globs (`glm*`), `*` = allow-all, `[]` = allow-none, omitted = allow-all.
+
+Behavior when a client pins a model **outside** the allowlist:
+
+| `allowClientModelPinning` | Behavior |
+|---|---|
+| `true` / omitted (default) | Pin ignored; the policy's model profile for each candidate is used |
+| `false` | Request rejected with **403** (`error.class: "forbidden"`) |
+
+Pinned models **inside** the allowlist are honored as-is. This is a second governance layer on top of the per-client `allowedModels` (client allowlist AND policy allowlist both apply).
+
+---
+
 ## Related
 
 - [spec.md](../spec.md) - Full API documentation

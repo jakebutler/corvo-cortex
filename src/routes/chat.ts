@@ -201,6 +201,27 @@ async function handleHeaderDrivenRequest(
   const model = resolveModelAlias(hints.requestedModel || body.model || client.defaultModel || 'gpt-4o');
   const routePlan = buildRoutePlan(policy, hints, model);
 
+  if (routePlan.pinRejected) {
+    const pinnedModel = hints.requestedModel || body.model || model;
+    const errorPayload = {
+      error: {
+        class: 'forbidden',
+        stage: routePlan.stage,
+        strategy: routePlan.strategy,
+        route_id: routePlan.routeId,
+        message: `Model '${pinnedModel}' is not permitted by the routing policy`,
+        model: pinnedModel
+      }
+    };
+    storeResponseData(c, errorPayload);
+    setCorvoHeadersOnContext(c, {
+      model,
+      routeId: routePlan.routeId,
+      latencyMs: Date.now() - requestStart
+    });
+    return c.json(errorPayload, 403);
+  }
+
   updateTelemetryMetadata(c, 'unresolved', routePlan.model || model, rawBody, {
     routing_stage: routePlan.stage,
     routing_strategy: routePlan.strategy,
