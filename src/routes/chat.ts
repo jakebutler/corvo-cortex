@@ -10,7 +10,7 @@ import {
   storeTelemetryCost,
   setTelemetryCompletion
 } from '../middleware/telemetry';
-import { determineProvider } from '../services/router';
+import { determineProvider, toOpenRouterModelId } from '../services/router';
 import { estimateCostFromUsage, estimateRequestMaxCost } from '../services/pricing';
 import {
   getCreditBalance,
@@ -293,6 +293,10 @@ async function handleHeaderDrivenRequest(
           return createFailureResult('upstream_4xx', 'Model not mapped to DigitalOcean', false);
         }
         candidateModel = doModel;
+      }
+
+      if (candidate.provider === 'openrouter') {
+        candidateModel = toOpenRouterModelId(candidateModel);
       }
 
       const route = resolveHeaderModeRoute(candidate.provider, c.env);
@@ -809,7 +813,7 @@ async function handleLegacyRequest(
           'HTTP-Referer': 'https://cortex.corvolabs.com',
           'X-Title': 'Corvo Cortex'
         },
-        model: wireModel,
+        model: toOpenRouterModelId(wireModel),
         fallback: { reason: 'insufficient_credits', from: route.provider }
       };
       finalBalance = await getCreditBalance(c.env, route.provider);

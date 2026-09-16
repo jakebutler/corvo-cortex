@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { determineProvider } from '../../src/services/router';
+import { determineProvider, toOpenRouterModelId } from '../../src/services/router';
 import type { ClientConfig, Env } from '../../src/types';
 import { createMockKV, createMockCreditLedger } from '../mocks/env';
 
@@ -136,6 +136,23 @@ describe('determineProvider', () => {
     const route = await determineProvider('glm-5', mockClient, mockEnv);
     expect(route.provider).toBe('z-ai-pro');
     expect(route.model).toBe('glm-5');
+  });
+
+  describe('toOpenRouterModelId', () => {
+    it('vendor-prefixes bare open-weight and proprietary ids for OpenRouter', () => {
+      expect(toOpenRouterModelId('glm-5.3-flash')).toBe('z-ai/glm-5.3-flash');
+      expect(toOpenRouterModelId('llama-4-maverick')).toBe('meta-llama/llama-4-maverick');
+      expect(toOpenRouterModelId('deepseek-v4.1-flash')).toBe('deepseek/deepseek-v4.1-flash');
+      expect(toOpenRouterModelId('mistral-3-14B')).toBe('mistralai/mistral-3-14B');
+      expect(toOpenRouterModelId('gpt-5.2')).toBe('openai/gpt-5.2');
+      expect(toOpenRouterModelId('o3')).toBe('openai/o3');
+      expect(toOpenRouterModelId('claude-sonnet-4-6')).toBe('anthropic/claude-sonnet-4-6');
+    });
+
+    it('leaves already-prefixed and unknown ids untouched', () => {
+      expect(toOpenRouterModelId('z-ai/glm-5.3-flash')).toBe('z-ai/glm-5.3-flash');
+      expect(toOpenRouterModelId('some-unknown-model')).toBe('some-unknown-model');
+    });
   });
 
   describe('DigitalOcean preemption tier (#23)', () => {

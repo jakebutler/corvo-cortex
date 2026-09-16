@@ -51,6 +51,36 @@ function normalizeVendorPrefix(model: string): NormalizedModel {
  * the prefix stripped; unknown or mismatched vendors stay on OpenRouter, which
  * understands prefixed ids natively.
  */
+const OPENROUTER_VENDOR_BY_PREFIX: Array<[string, string]> = [
+  ['glm', 'z-ai'],
+  ['z-ai', 'z-ai'],
+  ['llama', 'meta-llama'],
+  ['deepseek', 'deepseek'],
+  ['mistral', 'mistralai'],
+  ['qwen', 'qwen'],
+  ['minimax', 'minimax'],
+  ['gpt', 'openai'],
+  ['chatgpt', 'openai'],
+  ['claude', 'anthropic']
+];
+
+/**
+ * OpenRouter requires vendor-prefixed model ids. Map bare gateway model names
+ * to their OpenRouter id; already-prefixed and unknown ids pass through.
+ */
+export function toOpenRouterModelId(model: string): string {
+  if (model.includes('/')) return model;
+  const lowered = model.toLowerCase();
+  for (const [prefix, vendor] of OPENROUTER_VENDOR_BY_PREFIX) {
+    if (lowered.startsWith(prefix)) {
+      const rest = lowered.startsWith('openai-') ? model.slice('openai-'.length) : model;
+      return `${vendor}/${rest}`;
+    }
+  }
+  if (/^o\d/i.test(lowered)) return `openai/${model}`;
+  return model;
+}
+
 export async function determineProvider(
   model: string,
   client: ClientConfig,
@@ -175,7 +205,7 @@ export async function determineProvider(
     throw new Error('Payment Required: Direct credits exhausted. Fail-fast policy enabled.');
   }
 
-  // Default to OpenRouter fallback (keeps vendor-prefixed ids verbatim)
+  // Default to OpenRouter fallback (vendor-prefixes bare ids)
   return {
     provider: 'openrouter',
     url: 'https://openrouter.ai/api/v1/chat/completions',
@@ -185,7 +215,7 @@ export async function determineProvider(
       'HTTP-Referer': 'https://cortex.corvolabs.com',
       'X-Title': 'Corvo Cortex'
     },
-    model,
+    model: toOpenRouterModelId(model),
     fallback
   };
 }

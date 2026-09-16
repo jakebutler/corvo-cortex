@@ -16,6 +16,8 @@ import { syncDigitalOceanBalance } from './services/digitalocean';
 
 const app = new Hono<{ Bindings: Env }>();
 
+const DO_BALANCE_WARN_THRESHOLD_USD = 250;
+
 // CORS middleware - Permissive by default for API gateway use case
 // Set ALLOWED_ORIGINS env var to restrict (comma-separated list)
 app.use('*', cors({
@@ -90,6 +92,15 @@ export default {
       const doSnapshot = await syncDigitalOceanBalance(env);
       if (!doSnapshot) {
         console.warn('DigitalOcean balance sync skipped (DIGITAL_OCEAN_BALANCE_TOKEN unset or API unreachable)');
+      } else if (doSnapshot.balance < DO_BALANCE_WARN_THRESHOLD_USD) {
+        // Prepaid-balance watchdog: DO suspends inference at $0 and the
+        // balance is shared with other DO products.
+        console.warn(JSON.stringify({
+          source: 'do-balance-watchdog',
+          balance: doSnapshot.balance,
+          threshold: DO_BALANCE_WARN_THRESHOLD_USD,
+          syncedAt: doSnapshot.syncedAt
+        }));
       }
     } catch (error) {
       console.error('DigitalOcean balance sync failed:', error);

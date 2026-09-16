@@ -65,6 +65,16 @@ function isRetryableError(error: unknown): boolean {
   return false;
 }
 
+const MAX_RETRY_AFTER_MS = 30_000;
+
+function retryAfterMs(response: Response): number | undefined {
+  const header = response.headers.get('retry-after');
+  if (!header) return undefined;
+  const seconds = Number.parseFloat(header);
+  if (!Number.isFinite(seconds) || seconds < 0) return undefined;
+  return Math.min(seconds * 1000, MAX_RETRY_AFTER_MS);
+}
+
 /**
  * Fetch with exponential backoff retry logic
  */
@@ -105,8 +115,8 @@ export async function fetchWithRetry(
       // Call onRetry callback
       opts.onRetry(attempt + 1, lastError);
 
-      // Wait before retrying
-      const delay = calculateDelay(attempt, opts.baseDelay, opts.maxDelay);
+      // Wait before retrying (respect Retry-After when the provider sends it)
+      const delay = retryAfterMs(response) ?? calculateDelay(attempt, opts.baseDelay, opts.maxDelay);
       await new Promise(resolve => setTimeout(resolve, delay));
       throwIfAborted();
 

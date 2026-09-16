@@ -50,16 +50,28 @@ export type ProviderConcurrencyAcquireResult =
   | { allowed: true; lease?: ProviderConcurrencyLease }
   | { allowed: false; limit: number; inFlight: number };
 
+// Provider-level in-flight caps. Z.ai keeps its per-model table (official
+// concurrency limits); DigitalOcean defaults conservatively for low tiers
+// (T1-2: 120 RPM account-wide) — raise alongside the DO tier.
+const PROVIDER_CONCURRENCY_LIMITS: Partial<Record<LLMProvider, number>> = {
+  'digitalocean': 8
+};
+
+function getConcurrencyLimit(provider: LLMProvider, model: string): number | undefined {
+  if (provider === 'z-ai-pro') {
+    return getZaiModelConcurrencyLimit(model);
+  }
+  // nosemgrep: javascript.lang.security.audit.object-injection.object-injection
+  // eslint-disable-next-line security/detect-object-injection
+  return PROVIDER_CONCURRENCY_LIMITS[provider];
+}
+
 export async function acquireProviderConcurrencyLease(
   env: Env,
   provider: LLMProvider,
   model: string
 ): Promise<ProviderConcurrencyAcquireResult> {
-  if (provider !== 'z-ai-pro') {
-    return { allowed: true };
-  }
-
-  const limit = getZaiModelConcurrencyLimit(model);
+  const limit = getConcurrencyLimit(provider, model);
   if (!limit || !env.PROVIDER_CONCURRENCY) {
     return { allowed: true };
   }
@@ -90,7 +102,7 @@ export async function acquireProviderConcurrencyLease(
         };
       }
 
-      console.warn('Provider concurrency acquire failed, failing open for z-ai-pro.');
+      console.warn(`Provider concurrency acquire failed, failing open for ${provider}.`);
       return { allowed: true };
     }
 
@@ -105,7 +117,7 @@ export async function acquireProviderConcurrencyLease(
     };
   } catch (error) {
     console.warn(
-      'Provider concurrency acquire failed, failing open for z-ai-pro:',
+      `Provider concurrency acquire failed, failing open for ${provider}:`,
       error instanceof Error ? error.message : String(error)
     );
     return { allowed: true };
@@ -132,7 +144,7 @@ export async function releaseProviderConcurrencyLease(
     );
   } catch (error) {
     console.warn(
-      'Provider concurrency release failed for z-ai-pro:',
+      'Provider concurrency release failed:',
       error instanceof Error ? error.message : String(error)
     );
   }

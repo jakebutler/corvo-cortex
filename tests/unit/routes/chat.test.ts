@@ -693,7 +693,7 @@ describe('Chat Route - /v1/chat/completions', () => {
                 expect.any(Object)
             );
             expect(response.headers.get('x-corvo-cortex-provider')).toBe('openrouter');
-            expect(response.headers.get('x-corvo-cortex-model')).toBe('gpt-5-mini');
+            expect(response.headers.get('x-corvo-cortex-model')).toBe('openai/gpt-5-mini');
             expect(response.headers.get('x-corvo-cortex-route-id')).not.toBe('unknown');
             expect(response.headers.get('x-corvo-cortex-fallback-used')).toBe('false');
             expect(response.headers.get('x-corvo-cortex-hedge-used')).toBe('false');
@@ -810,7 +810,7 @@ describe('Chat Route - /v1/chat/completions', () => {
                 .find((call) => String(call[0]).includes('openrouter.ai'));
             expect(upstreamCall).toBeDefined();
             const upstreamBody = JSON.parse(upstreamCall![1].body as string);
-            expect(upstreamBody.model).toBe('glm-5.3-flash');
+            expect(upstreamBody.model).toBe('z-ai/glm-5.3-flash');
         });
 
         it('returns 403 when pinning is rejected by allowClientModelPinning: false', async () => {

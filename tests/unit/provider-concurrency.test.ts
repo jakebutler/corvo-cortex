@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { ProviderConcurrency } from '../../src/durable-objects/provider-concurrency';
+import { acquireProviderConcurrencyLease } from '../../src/services/provider-concurrency';
 
 describe('ProviderConcurrency', () => {
   let providerConcurrency: ProviderConcurrency;
@@ -102,4 +103,51 @@ describe('ProviderConcurrency', () => {
 
     expect(acquireAfterExpiry.status).toBe(200);
   });
+});
+
+describe('acquireProviderConcurrencyLease (generalized)', () => {
+    const originalFetch = globalThis.fetch;
+
+    afterEach(() => {
+        globalThis.fetch = originalFetch;
+        vi.restoreAllMocks();
+    });
+
+    function mockNamespace(status = 200, payload = { acquired: true, leaseId: 'lease-1', limit: 8, inFlight: 1 }) {
+        return {
+            get: () => ({
+                fetch: async () => new Response(JSON.stringify(payload), { status })
+            }),
+            idFromName: () => ({ toString: () => 'ns' })
+        } as unknown as DurableObjectNamespace;
+    }
+
+    it('applies the digitalocean provider cap', async () => {
+        const env = { PROVIDER_CONCURRENCY: mockNamespace() } as unknown as import('../../src/types').Env;
+        const result = await acquireProviderConcurrencyLease(env, 'digitalocean', 'glm-5.3-flash');
+
+        expect(result.allowed).toBe(true);
+        if (result.allowed && result.lease) {
+            expect(result.lease.provider).toBe('digitalocean');
+            expect(result.lease.limit).toBe(8);
+        }
+    });
+
+    it('returns allowed-true for uncapped providers', async () => {
+        const env = { PROVIDER_CONCURRENCY: mockNamespace() } as unknown as import('../../src/types').Env;
+        const result = await acquireProviderConcurrencyLease(env, 'openrouter', 'z-ai/glm-5.3-flash');
+        expect(result.allowed).toBe(true);
+    });
+
+    it('rejects when the digitalocean cap is reached', async () => {
+        const env = {
+            PROVIDER_CONCURRENCY: mockNamespace(200, { acquired: false, limit: 8, inFlight: 8 })
+        } as unknown as import('../../src/types').Env;
+
+        const result = await acquireProviderConcurrencyLease(env, 'digitalocean', 'glm-5.3-flash');
+        expect(result.allowed).toBe(false);
+        if (!result.allowed) {
+            expect(result.limit).toBe(8);
+        }
+    });
 });

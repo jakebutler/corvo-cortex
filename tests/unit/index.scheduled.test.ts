@@ -38,4 +38,27 @@ describe('index scheduled handler', () => {
     expect(syncOpenRouterCredits).toHaveBeenCalledWith(env);
     expect(syncDigitalOceanBalance).toHaveBeenCalledWith(env);
   });
+
+  it('warns when the synced DigitalOcean balance is below the watchdog threshold', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const module = await import('../../src/index');
+    const worker = module.default as { scheduled: (event: unknown, env: Env, ctx: unknown) => Promise<void> };
+    syncDigitalOceanBalance.mockResolvedValue({ balance: 42.5, syncedAt: new Date().toISOString() });
+
+    const env = {
+      CORTEX_CONFIG: { get: vi.fn().mockResolvedValue(null), put: vi.fn() },
+      ENVIRONMENT: 'test'
+    } as unknown as Env;
+
+    await worker.scheduled({}, env, {});
+
+    const watchdogLines = warnSpy.mock.calls
+      .map((call) => String(call[0]))
+      .filter((line) => line.includes('do-balance-watchdog'))
+      .map((line) => JSON.parse(line) as { balance: number });
+
+    expect(watchdogLines.length).toBe(1);
+    expect(watchdogLines[0].balance).toBe(42.5);
+    warnSpy.mockRestore();
+  });
 });
