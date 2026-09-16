@@ -3,7 +3,7 @@ import { authMiddleware } from '../../src/middleware/auth';
 import { Hono } from 'hono';
 import { createMockKV, createMockClientConfig, TEST_API_KEY } from '../mocks/env';
 import type { Env, Variables } from '../../src/types';
-import { __clearAuthCacheForTests } from '../../src/middleware/auth';
+import { __clearAuthCacheForTests, __getAuthCacheSizeForTests, __getAuthCacheTtlForTests } from '../../src/middleware/auth';
 
 describe('authMiddleware', () => {
   let app: Hono<{ Bindings: Env; Variables: Variables }>;
@@ -103,7 +103,7 @@ describe('authMiddleware', () => {
     expect(getCalls).toBe(1);
   });
 
-  it('should cache invalid lookups briefly to reduce repeated misses', async () => {
+  it('should not cache negative lookups', async () => {
     let getCalls = 0;
     const envWithSpy = {
       ...mockEnv,
@@ -124,6 +124,84 @@ describe('authMiddleware', () => {
 
     expect(responseA.status).toBe(401);
     expect(responseB.status).toBe(401);
-    expect(getCalls).toBe(1);
+    expect(getCalls).toBe(2);
+    expect(__getAuthCacheSizeForTests()).toBe(0);
+  });
+
+  it('should not grow the auth cache when flooded with unique invalid keys', async () => {
+    const envWithSpy = {
+      ...mockEnv,
+      CORTEX_CLIENTS: {
+        get: async () => null
+      } as unknown as KVNamespace
+    } as Env;
+
+    for (let i = 0; i < 1_500; i++) {
+      const request = new Request('http://localhost/test', {
+        headers: { 'Authorization': `Bearer invalid-key-${i}` }
+      });
+      const response = await app.fetch(request, envWithSpy);
+      expect(response.status).toBe(401);
+    }
+
+    expect(__getAuthCacheSizeForTests()).toBe(0);
+  });
+
+  it('should bound the cache size when many valid keys are cached', async () => {
+    const maxEntries = 1_000;
+    const entries: Record<string, unknown> = {};
+    for (let i = 0; i < maxEntries + 50; i++) {
+      entries[`sk-corvo-flood-${i}`] = createMockClientConfig();
+    }
+
+    const floodEnv = {
+      ...mockEnv,
+      CORTEX_CLIENTS: createMockKV(entries)
+    } as Env;
+
+    for (let i = 0; i < maxEntries + 50; i++) {
+      const request = new Request('http://localhost/test', {
+        headers: { 'Authorization': `Bearer sk-corvo-flood-${i}` }
+      });
+      const response = await app.fetch(request, floodEnv);
+      expect(response.status).toBe(200);
+    }
+
+    expect(__getAuthCacheSizeForTests()).toBeLessThanOrEqual(maxEntries);
+  });
+
+  it('should clamp AUTH_CACHE_TTL_MS to the 5 minute maximum', () => {
+    expect(__getAuthCacheTtlForTests({} as Env)).toBe(30_000);
+    expect(__getAuthCacheTtlForTests({ AUTH_CACHE_TTL_MS: '45000' } as Env)).toBe(45_000);
+    expect(__getAuthCacheTtlForTests({ AUTH_CACHE_TTL_MS: '999999999' } as Env)).toBe(300_000);
+    expect(__getAuthCacheTtlForTests({ AUTH_CACHE_TTL_MS: 'not-a-number' } as Env)).toBe(30_000);
+  });
+
+  it('should propagate KV key deletion within the cache TTL', async () => {
+    const clientsKv = createMockKV({
+      [TEST_API_KEY]: createMockClientConfig()
+    });
+    const shortTtlEnv = {
+      ...mockEnv,
+      AUTH_CACHE_TTL_MS: '50',
+      CORTEX_CLIENTS: clientsKv
+    } as Env;
+
+    const request = () => new Request('http://localhost/test', {
+      headers: { 'Authorization': `Bearer ${TEST_API_KEY}` }
+    });
+
+    const first = await app.fetch(request(), shortTtlEnv);
+    expect(first.status).toBe(200);
+
+    await clientsKv.delete(TEST_API_KEY);
+
+    const second = await app.fetch(request(), shortTtlEnv);
+    expect(second.status).toBe(200);
+
+    await new Promise((resolve) => setTimeout(resolve, 80));
+
+    const third = await app.fetch(request(), shortTtlEnv);
+    expect(third.status).toBe(401);
   });
 });
