@@ -21,6 +21,8 @@ export function getAdapterForProvider(provider: LLMProvider) {
       return anthropicAdapter;
     case 'fireworks':
       return openaiAdapter;
+    case 'digitalocean':
+      return openaiAdapter;
     default:
       return openaiAdapter; // Default to OpenAI format
   }

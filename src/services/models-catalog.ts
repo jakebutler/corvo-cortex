@@ -1,7 +1,8 @@
 import type { Env } from '../types';
 import { getFireworksModelCatalog, refreshFireworksModelCatalog } from './fireworks-models';
+import { fetchDigitalOceanModels } from './digitalocean';
 
-export type ModelProvider = 'openai' | 'anthropic' | 'z-ai' | 'minimax' | 'openrouter' | 'fireworks' | 'gemini';
+export type ModelProvider = 'openai' | 'anthropic' | 'z-ai' | 'minimax' | 'openrouter' | 'fireworks' | 'gemini' | 'digitalocean';
 
 export interface ModelRecord {
   id: string;
@@ -46,7 +47,8 @@ export async function refreshAllModelCatalogs(
     minimax: { ok: false, count: 0, error: 'not_requested' },
     openrouter: { ok: false, count: 0, error: 'not_requested' },
     fireworks: { ok: false, count: 0, error: 'not_requested' },
-    gemini: { ok: false, count: 0, error: 'not_requested' }
+    gemini: { ok: false, count: 0, error: 'not_requested' },
+    digitalocean: { ok: false, count: 0, error: 'not_requested' }
   };
   const catalogs: ModelCatalog[] = [];
   const openrouterRaw = providers.includes('openrouter') || providers.includes('openai') || providers.includes('anthropic') || providers.includes('gemini')
@@ -126,6 +128,9 @@ async function refreshProviderCatalog(env: Env, provider: ModelProvider, openrou
       break;
     case 'gemini':
       models = await fetchGeminiModels(openrouterRaw);
+      break;
+    case 'digitalocean':
+      models = await fetchDigitalOceanModels(env);
       break;
     default:
       models = [];
@@ -498,6 +503,8 @@ function getModelCatalogKey(provider: ModelProvider): string {
       return 'models:fireworks:catalog';
     case 'gemini':
       return 'models:gemini';
+    case 'digitalocean':
+      return 'models:digitalocean';
     default:
       return 'models:openai';
   }
@@ -529,6 +536,9 @@ function setRefreshResult(
       return;
     case 'gemini':
       results.gemini = result;
+      return;
+    case 'digitalocean':
+      results.digitalocean = result;
       return;
     default:
       results.openai = result;

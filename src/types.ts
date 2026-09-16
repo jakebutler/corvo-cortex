@@ -77,6 +77,8 @@ export interface Env {
   MINIMAX_API_KEY: string;
   FIREWORKS_API_KEY: string;
   ADMIN_API_KEY?: string;
+  DIGITAL_OCEAN_MODEL_ACCESS_KEY?: string;   // DO Inference model access key
+  DIGITAL_OCEAN_BALANCE_TOKEN?: string;      // dop_v1_ token for the DO balance API
 
   // LangFuse (secrets)
   LANGFUSE_PUBLIC_KEY: string;
@@ -87,6 +89,7 @@ export interface Env {
   CREDITS_ANTHROPIC?: string;
   CREDITS_OPENAI?: string;
   CREDITS_MINIMAX?: string;
+  CREDITS_DIGITALOCEAN?: string;
 
   // Durable Objects
   CIRCUIT_BREAKER: DurableObjectNamespace;
@@ -102,7 +105,7 @@ export interface Env {
 }
 
 // Provider types
-export type LLMProvider = 'anthropic-direct' | 'openai-direct' | 'z-ai-pro' | 'openrouter' | 'minimax' | 'fireworks';
+export type LLMProvider = 'anthropic-direct' | 'openai-direct' | 'z-ai-pro' | 'openrouter' | 'minimax' | 'fireworks' | 'digitalocean';
 
 // Circuit breaker state
 export type CircuitState = 'closed' | 'open' | 'half-open';

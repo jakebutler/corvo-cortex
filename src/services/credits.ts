@@ -34,7 +34,8 @@ const LEDGER_PROVIDERS: LLMProvider[] = [
   'z-ai-pro',
   'openrouter',
   'minimax',
-  'fireworks'
+  'fireworks',
+  'digitalocean'
 ];
 
 function ledgerRequestInit(path: string, body: unknown): Request {

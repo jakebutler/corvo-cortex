@@ -11,13 +11,14 @@ import { getProviderPricing, ProviderPricing } from '../services/pricing';
 import { refreshAllModelCatalogs, ModelProvider } from '../services/models-catalog';
 import { getRoutingPolicy, getRoutingPolicyConfigKey } from '../services/routing-policy';
 import { routingPolicySchema } from '../schemas/routing-policy';
+import { syncDigitalOceanBalance } from '../services/digitalocean';
 
 const adminApp = new Hono<{ Bindings: Env }>();
 
 // Apply admin auth to all routes
 adminApp.use('*', adminAuthMiddleware);
 
-const PROVIDERS: LLMProvider[] = ['anthropic-direct', 'openai-direct', 'z-ai-pro', 'openrouter', 'minimax', 'fireworks'];
+const PROVIDERS: LLMProvider[] = ['anthropic-direct', 'openai-direct', 'z-ai-pro', 'openrouter', 'minimax', 'fireworks', 'digitalocean'];
 const SANE_CREDIT_LIMIT = 1_000_000;
 
 function maskApiKey(key: string): string {
@@ -216,8 +217,24 @@ adminApp.post('/credits/sync', async (c) => {
   const body = await c.req.json().catch(() => ({})) as { provider?: LLMProvider };
   const provider = body.provider || 'openrouter';
 
+  if (provider === 'digitalocean') {
+    const snapshot = await syncDigitalOceanBalance(c.env);
+    if (!snapshot) {
+      return c.json({ error: 'Failed to sync DigitalOcean balance (is DIGITAL_OCEAN_BALANCE_TOKEN set?)' }, 502);
+    }
+
+    await auditAdminAction('credits.sync', { provider: 'digitalocean', balance: snapshot.balance });
+
+    const balance = await getCreditBalance(c.env, 'digitalocean');
+    return c.json({
+      provider: 'digitalocean',
+      snapshot,
+      balance
+    });
+  }
+
   if (provider !== 'openrouter') {
-    return c.json({ error: 'Only openrouter sync is supported currently' }, 400);
+    return c.json({ error: 'Only openrouter and digitalocean sync are supported currently' }, 400);
   }
 
   const snapshot = await syncOpenRouterCredits(c.env);

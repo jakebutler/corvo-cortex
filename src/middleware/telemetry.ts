@@ -212,7 +212,8 @@ function isKnownProvider(provider: string): provider is LLMProvider {
     'z-ai-pro',
     'openrouter',
     'minimax',
-    'fireworks'
+    'fireworks',
+    'digitalocean'
   ]);
   return knownProviders.has(provider as LLMProvider);
 }

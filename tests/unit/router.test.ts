@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { determineProvider } from '../../src/services/router';
 import type { ClientConfig, Env } from '../../src/types';
-import { createMockKV } from '../mocks/env';
+import { createMockKV, createMockCreditLedger } from '../mocks/env';
 
 describe('determineProvider', () => {
   const mockClient: ClientConfig = {
@@ -136,5 +136,41 @@ describe('determineProvider', () => {
     const route = await determineProvider('glm-5', mockClient, mockEnv);
     expect(route.provider).toBe('z-ai-pro');
     expect(route.model).toBe('glm-5');
+  });
+
+  describe('DigitalOcean preemption tier (#23)', () => {
+    const doEnv = (overrides: Record<string, unknown> = {}) => ({
+      ...mockEnv,
+      CREDIT_LEDGER: createMockCreditLedger(),
+      CREDITS_DIGITALOCEAN: 'true',
+      DIGITAL_OCEAN_MODEL_ACCESS_KEY: 'do-key',
+      ...overrides
+    } as Env);
+
+    it('routes mapped models DO-first when the credit flag is on', async () => {
+      const route = await determineProvider('glm-4.7', mockClient, doEnv());
+
+      expect(route.provider).toBe('digitalocean');
+      expect(route.url).toBe('https://inference.do-ai.run/v1/chat/completions');
+      expect(route.model).toBe('glm-5.3-flash');
+    });
+
+    it('does not route DO when the credit flag is off (falls through to Z.ai for glm)', async () => {
+      const route = await determineProvider('glm-5.3-flash', mockClient, { ...mockEnv } as Env);
+
+      expect(route.provider).toBe('z-ai-pro');
+    });
+
+    it('does not route unmapped models to DO (falls back to OpenRouter)', async () => {
+      const route = await determineProvider('gpt-4o', mockClient, doEnv({ CREDITS_OPENAI: undefined }));
+
+      expect(route.provider).toBe('openrouter');
+    });
+
+    it('routes DO above Fireworks when both would match (mapped model)', async () => {
+      const route = await determineProvider('glm-5.3-flash', mockClient, doEnv());
+
+      expect(route.provider).toBe('digitalocean');
+    });
   });
 });

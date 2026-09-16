@@ -59,6 +59,11 @@ crons = ["0 0 * * *"]
 # ZAI_API_KEY
 # OPENROUTER_API_KEY
 # OPENROUTER_PROVISIONING_API_KEY (recommended for /api/v1/credits)
+# MINIMAX_API_KEY
+# FIREWORKS_API_KEY
+# ADMIN_API_KEY (admin surface credential)
+# DIGITAL_OCEAN_MODEL_ACCESS_KEY (DO Inference model access key)
+# DIGITAL_OCEAN_BALANCE_TOKEN (dop_v1_ token, enables DO ledger balance sync)
 # LANGFUSE_PUBLIC_KEY
 # LANGFUSE_SECRET_KEY
 # LANGFUSE_BASE_URL is a non-secret var (set in [vars])
@@ -110,6 +115,7 @@ ENVIRONMENT = "production"
 CREDITS_ANTHROPIC = "true"
 CREDITS_OPENAI = "true"
 CREDITS_MINIMAX = "true"
+CREDITS_DIGITALOCEAN = "true"
 LANGFUSE_BASE_URL = "https://us.cloud.langfuse.com"
 # CORS allowlist: browsers may only call the gateway from these origins.
 # Native mobile clients (Kinisi Mobile) are not affected by CORS. Add web app

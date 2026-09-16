@@ -12,6 +12,7 @@ import { CreditLedger } from './durable-objects/credit-ledger';
 import { ProviderConcurrency } from './durable-objects/provider-concurrency';
 import { refreshAllModelCatalogs } from './services/models-catalog';
 import { syncOpenRouterCredits, clearAllProviderExhaustion } from './services/credits';
+import { syncDigitalOceanBalance } from './services/digitalocean';
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -74,7 +75,7 @@ export default {
   fetch: app.fetch,
   async scheduled(_event: unknown, env: Env, _ctx: unknown) {
     try {
-      await refreshAllModelCatalogs(env);
+      await refreshAllModelCatalogs(env, ['openai', 'anthropic', 'z-ai', 'minimax', 'openrouter', 'fireworks', 'gemini', 'digitalocean']);
     } catch (error) {
       console.error('Fireworks model catalog refresh failed:', error);
     }
@@ -83,6 +84,15 @@ export default {
       await syncOpenRouterCredits(env);
     } catch (error) {
       console.error('OpenRouter credit sync failed:', error);
+    }
+
+    try {
+      const doSnapshot = await syncDigitalOceanBalance(env);
+      if (!doSnapshot) {
+        console.warn('DigitalOcean balance sync skipped (DIGITAL_OCEAN_BALANCE_TOKEN unset or API unreachable)');
+      }
+    } catch (error) {
+      console.error('DigitalOcean balance sync failed:', error);
     }
 
     try {

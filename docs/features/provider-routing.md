@@ -132,6 +132,7 @@ npx wrangler kv key put --namespace-id=<CORTEX_CONFIG_ID> "config:model-aliases"
 
 Direct-provider selection uses **prefix matching on the vendor-normalized model name** (never substring matching):
 
+- `-1.` DigitalOcean preemption: KV-mapped models (see [DigitalOcean](./digitalocean.md)) when `CREDITS_DIGITALOCEAN=true` and ledger available > 0
 - `glm*` / `z-ai*` → Z.ai Pro
 - `claude*` → Anthropic Direct (with credits)
 - `gpt*` / `o<digit>*` → OpenAI Direct (with credits)

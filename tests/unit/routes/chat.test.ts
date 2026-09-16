@@ -1076,4 +1076,133 @@ describe('Chat Route - /v1/chat/completions', () => {
             expect(response.status).toBe(200);
         });
     });
+
+    describe('DigitalOcean routing (#23)', () => {
+        function createDoRouteEnv(overrides: Partial<Env> = {}): Env {
+            return createMockEnv({
+                CREDITS_DIGITALOCEAN: 'true',
+                DIGITAL_OCEAN_MODEL_ACCESS_KEY: 'do-key',
+                ...overrides
+            });
+        }
+
+        function doUpstreamMock(overrides: { status?: number; body?: unknown } = {}) {
+            return vi.fn().mockImplementation(async (url: string) => {
+                if (url.includes('inference.do-ai.run')) {
+                    return new Response(JSON.stringify(overrides.body ?? {
+                        error: 'DO unavailable'
+                    }), {
+                        status: overrides.status ?? 200,
+                        headers: { 'Content-Type': 'application/json' }
+                    });
+                }
+                if (url.includes('openrouter.ai')) {
+                    return new Response(JSON.stringify({
+                        id: 'chatcmpl-router',
+                        object: 'chat.completion',
+                        created: Math.floor(Date.now() / 1000),
+                        model: 'glm-5.3-flash',
+                        choices: [{
+                            index: 0,
+                            message: { role: 'assistant', content: 'Fallback success' },
+                            finish_reason: 'stop'
+                        }],
+                        usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 }
+                    }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+                }
+                return new Response('Not found', { status: 404 });
+            });
+        }
+
+        function glmRequest(): Request {
+            return new Request('http://localhost/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${TEST_API_KEY}`
+                },
+                body: JSON.stringify({
+                    model: 'glm-4.7',
+                    max_tokens: 100,
+                    messages: [{ role: 'user', content: 'Hello' }]
+                })
+            });
+        }
+
+        it('routes mapped models DO-first with the DO slug upstream', async () => {
+            const env = createDoRouteEnv();
+            globalThis.fetch = doUpstreamMock({
+                body: {
+                    id: 'chatcmpl-do',
+                    object: 'chat.completion',
+                    created: Math.floor(Date.now() / 1000),
+                    model: 'glm-5.3-flash',
+                    choices: [{ index: 0, message: { role: 'assistant', content: 'Hello from DO' }, finish_reason: 'stop' }],
+                    usage: { prompt_tokens: 12, completion_tokens: 8, total_tokens: 20 }
+                }
+            });
+
+            const response = await chatApp.fetch(glmRequest(), env, mockExecutionCtx);
+            const json = await response.json() as { choices: Array<{ message: { content: string } }> };
+
+            expect(response.status).toBe(200);
+            expect(json.choices[0].message.content).toBe('Hello from DO');
+            expect(response.headers.get('x-corvo-cortex-provider')).toBe('digitalocean');
+            expect(response.headers.get('x-corvo-cortex-model')).toBe('glm-5.3-flash');
+
+            const upstreamCall = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls
+                .find((call) => String(call[0]).includes('inference.do-ai.run'));
+            expect(upstreamCall).toBeDefined();
+            const upstreamBody = JSON.parse(upstreamCall![1].body as string);
+            expect(upstreamBody.model).toBe('glm-5.3-flash');
+            const authHeader = (upstreamCall![1].headers as Record<string, string>)['Authorization'];
+            expect(authHeader).toBe('Bearer do-key');
+        });
+
+        it('falls through to OpenRouter when DO responds 402 (prepaid exhausted)', async () => {
+            const env = createDoRouteEnv();
+            globalThis.fetch = doUpstreamMock({ status: 402, body: { error: 'prepaid balance exhausted' } });
+
+            const response = await chatApp.fetch(glmRequest(), env, mockExecutionCtx);
+            const json = await response.json() as { choices: Array<{ message: { content: string } }> };
+
+            expect(response.status).toBe(200);
+            expect(json.choices[0].message.content).toBe('Fallback success');
+            expect(response.headers.get('x-corvo-cortex-provider')).toBe('openrouter');
+            expect(response.headers.get('x-corvo-cortex-fallback-used')).toBe('true');
+        });
+
+        it('surfaces a throttled provider error when DO responds 429', async () => {
+            const env = createDoRouteEnv();
+            globalThis.fetch = doUpstreamMock({ status: 429, body: { error: 'rate limited' } });
+
+            const response = await chatApp.fetch(glmRequest(), env, mockExecutionCtx);
+
+            expect(response.status).toBe(429);
+            const json = await response.json() as { details: { class: string } };
+            expect(json.details.class).toBe('throttled');
+        });
+
+        it('settles the digitalocean ledger after a successful DO call', async () => {
+            const env = createDoRouteEnv();
+            await setCreditBalance(env, 'digitalocean', 5, 'USD');
+            globalThis.fetch = doUpstreamMock({
+                body: {
+                    id: 'chatcmpl-do',
+                    object: 'chat.completion',
+                    created: Math.floor(Date.now() / 1000),
+                    model: 'glm-5.3-flash',
+                    choices: [{ index: 0, message: { role: 'assistant', content: 'Hi' }, finish_reason: 'stop' }],
+                    usage: { prompt_tokens: 1000, completion_tokens: 500, total_tokens: 1500 }
+                }
+            });
+
+            const response = await chatApp.fetch(glmRequest(), env, mockExecutionCtx);
+            expect(response.status).toBe(200);
+
+            const ledger = await getCreditBalance(env, 'digitalocean');
+            expect(ledger.balance).toBeLessThan(5);
+            expect(ledger.balance).toBeGreaterThanOrEqual(0);
+        });
+    });
 });

@@ -1,6 +1,7 @@
 import type { Env, ClientConfig, LLMProvider } from '../types';
 import { getCreditBalance } from './credits';
 import { isFireworksModel } from './fireworks-models';
+import { DIGITALOCEAN_CHAT_URL, resolveDigitalOceanModel } from './digitalocean';
 
 /**
  * Provider routing configuration
@@ -70,6 +71,29 @@ export async function determineProvider(
       : null;
   const routesDirect = (provider: LLMProvider): boolean =>
     vendor === undefined || vendorProvider === provider;
+
+  // -1. DigitalOcean preemption (broadest credit-funded tier, above Fireworks):
+  // config-driven mapping + catalog churn guard + credit gate. Unmapped models
+  // are never routed to DO.
+  if (env.CREDITS_DIGITALOCEAN === 'true' && routesDirect('digitalocean')) {
+    const doModel = await resolveDigitalOceanModel(env, name);
+    if (doModel) {
+      const balance = await getCreditBalance(env, 'digitalocean');
+      if (!balance.configured || balance.available > 0) {
+        return {
+          provider: 'digitalocean',
+          url: DIGITALOCEAN_CHAT_URL,
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${env.DIGITAL_OCEAN_MODEL_ACCESS_KEY}`
+          },
+          model: doModel,
+          fallback
+        };
+      }
+      fallback = { reason: 'insufficient_credits', from: 'digitalocean' };
+    }
+  }
 
   // 0. Fireworks preemption (if model in catalog and credits available)
   if (routesDirect('fireworks') && await isFireworksModel(env, name)) {

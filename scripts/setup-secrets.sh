@@ -55,6 +55,14 @@ echo "📌 Admin API Key (admin surface credential; generate with: openssl rand 
 wrangler secret put ADMIN_API_KEY --env production
 echo ""
 
+echo "📌 DigitalOcean Model Access Key (DO Inference):"
+wrangler secret put DIGITAL_OCEAN_MODEL_ACCESS_KEY --env production
+echo ""
+
+echo "📌 DigitalOcean Balance Token (dop_v1_, enables DO ledger balance sync):"
+wrangler secret put DIGITAL_OCEAN_BALANCE_TOKEN --env production
+echo ""
+
 echo "📌 LangFuse Public Key:"
 wrangler secret put LANGFUSE_PUBLIC_KEY --env production
 echo ""
@@ -63,10 +71,7 @@ echo "📌 LangFuse Secret Key:"
 wrangler secret put LANGFUSE_SECRET_KEY --env production
 echo ""
 
-# Future providers (uncomment when needed):
-# echo "📌 DigitalOcean API Key (provider integration #23):"
-# wrangler secret put DIGITALOCEAN_API_KEY --env production
-# echo ""
+# No pending future-provider secrets.""
 
 echo "✅ All secrets configured successfully!"
 echo ""
