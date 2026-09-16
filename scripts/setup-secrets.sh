@@ -39,6 +39,22 @@ echo "📌 OpenRouter API Key:"
 wrangler secret put OPENROUTER_API_KEY --env production
 echo ""
 
+echo "📌 OpenRouter Provisioning API Key (recommended for /api/v1/credits sync):"
+wrangler secret put OPENROUTER_PROVISIONING_API_KEY --env production
+echo ""
+
+echo "📌 MiniMax API Key:"
+wrangler secret put MINIMAX_API_KEY --env production
+echo ""
+
+echo "📌 Fireworks API Key:"
+wrangler secret put FIREWORKS_API_KEY --env production
+echo ""
+
+echo "📌 Admin API Key (admin surface credential; generate with: openssl rand -hex 24):"
+wrangler secret put ADMIN_API_KEY --env production
+echo ""
+
 echo "📌 LangFuse Public Key:"
 wrangler secret put LANGFUSE_PUBLIC_KEY --env production
 echo ""
@@ -46,6 +62,11 @@ echo ""
 echo "📌 LangFuse Secret Key:"
 wrangler secret put LANGFUSE_SECRET_KEY --env production
 echo ""
+
+# Future providers (uncomment when needed):
+# echo "📌 DigitalOcean API Key (provider integration #23):"
+# wrangler secret put DIGITALOCEAN_API_KEY --env production
+# echo ""
 
 echo "✅ All secrets configured successfully!"
 echo ""

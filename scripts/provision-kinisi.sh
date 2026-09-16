@@ -1,7 +1,8 @@
 #!/bin/bash
 
 # Configuration
-NAMESPACE_ID="8607bc102781438a8e1ea9d481a5a12b" # From wrangler.toml [env.production.kv_namespaces] CORTEX_CLIENTS
+# Namespace ID may be overridden via env; default is the production CORTEX_CLIENTS namespace.
+NAMESPACE_ID="${CORTEX_CLIENTS_NAMESPACE_ID:-8607bc102781438a8e1ea9d481a5a12b}"
 API_KEY="${KINISI_API_KEY}"
 
 if [ -z "$API_KEY" ]; then
@@ -9,11 +10,15 @@ if [ -z "$API_KEY" ]; then
   echo "Usage: KINISI_API_KEY=your_key ./scripts/provision-kinisi.sh"
   exit 1
 fi
+
+# Masked display only — never echo the full key.
+MASKED_KEY="${API_KEY:0:10}…${API_KEY: -4}"
+
 APP_NAME="Kinisi"
 
 echo "🚀 Provisioning '$APP_NAME' in Production..."
 echo "Namespace ID: $NAMESPACE_ID"
-echo "API Key: $API_KEY"
+echo "API Key: $MASKED_KEY"
 
 # Define Client Config
 # Note: Rate limits set to 1000/min requests and 1M/min tokens for production readiness
@@ -37,6 +42,6 @@ echo ""
 echo "✅ Credentials Provisioned!"
 echo "---------------------------------------------------"
 echo "App Name: $APP_NAME"
-echo "API Key:  $API_KEY"
+echo "API Key:  $MASKED_KEY"
 echo "Endpoint: https://cortex.corvolabs.com/v1/chat/completions"
 echo "---------------------------------------------------"

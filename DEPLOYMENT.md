@@ -260,7 +260,20 @@ function generateApiKey(appName: string): string {
 
 ---
 
-## 11. Support
+## 11. KV Namespace ID Rotation
+
+Production KV namespace IDs live in `wrangler.toml` `[env.production.kv_namespaces]`. They are identifiers, not secrets, but they rot if namespaces are recreated:
+
+1. Create the new namespace: `npx wrangler kv namespace create CORTEX_CLIENTS --env production`
+2. Update the `id` in `wrangler.toml` and deploy.
+3. Re-run the seed/provision scripts for any clients (KV data does not migrate automatically).
+4. Delete the old namespace only after confirming traffic is served from the new one.
+
+Preview environments use separate namespace IDs under `[env.preview]`.
+
+---
+
+## 12. Support
 
 For issues or questions, contact:
 - **Engineering:** eng@corvolabs.workers.dev

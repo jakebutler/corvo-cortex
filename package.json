@@ -17,7 +17,7 @@
     "lint:report": "eslint src --ext .ts,.tsx -f html -o reports/eslint-report.html",
     "complexity": "madge --circular --extensions ts,tsx src/ > reports/complexity.txt",
     "type-check": "tsc --noEmit",
-    "analyze": "npm run lint:report && npm run complexity && npm run type-check && npm run test:coverage"
+    "analyze": "mkdir -p reports && npm run lint:report && npm run complexity && npm run type-check && npm run test:coverage"
   },
   "keywords": [
     "ai",
