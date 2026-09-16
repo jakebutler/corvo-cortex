@@ -12,8 +12,8 @@ import {
   storeTelemetryUsage,
   setTelemetryCompletion
 } from '../middleware/telemetry';
-import { getCreditBalance, deductCredits } from '../services/credits';
-import { estimateCostFromUsage } from '../services/pricing';
+import { getCreditBalance, reserveCredits, settleCredits, releaseCreditsReservation } from '../services/credits';
+import { estimateCostFromUsage, estimateRequestMaxCost } from '../services/pricing';
 import { createStreamingResponseWithUsage } from '../utils/streaming';
 import { fetchWithRetry } from '../utils/retry';
 
@@ -125,7 +125,7 @@ responsesApp.post('/', async (c) => {
   }
 
   const balance = await getCreditBalance(c.env, provider);
-  if (balance.configured && balance.balance <= 0) {
+  if (balance.exhausted || (balance.configured && balance.available <= 0)) {
     c.header('X-Corvo-Provider', provider);
     c.header('X-Corvo-Fallback', 'false');
     c.header('X-Corvo-Fallback-Reason', 'insufficient_credits');
@@ -137,6 +137,49 @@ responsesApp.post('/', async (c) => {
     storeResponseData(c, errorPayload);
     return c.json(errorPayload, 402);
   }
+
+  let reservationId: string | undefined;
+  let estimateForReservation = 0;
+  if (balance.configured) {
+    const rawRecord = rawBody as Record<string, unknown>;
+    const estimate = await estimateRequestMaxCost({
+      env: c.env,
+      provider,
+      model,
+      input: rawRecord?.input ?? rawRecord?.messages,
+      maxTokens: typeof rawRecord?.max_tokens === 'number' ? rawRecord.max_tokens : undefined
+    });
+    const reservation = await reserveCredits(c.env, provider, estimate);
+    if (!reservation.ok || !reservation.reservationId) {
+      c.header('X-Corvo-Provider', provider);
+      c.header('X-Corvo-Fallback', 'false');
+      c.header('X-Corvo-Fallback-Reason', 'insufficient_credits');
+      const errorPayload = {
+        error: 'Payment Required',
+        message: 'Insufficient provider credits.',
+        provider
+      };
+      storeResponseData(c, errorPayload);
+      return c.json(errorPayload, 402);
+    }
+    reservationId = reservation.reservationId;
+    estimateForReservation = estimate;
+  }
+
+  let settled = false;
+  const settleReservation = async (actualCost: number): Promise<void> => {
+    if (!reservationId) return;
+    const id = reservationId;
+    reservationId = undefined;
+    settled = true;
+    const result = await settleCredits(c.env, provider, id, actualCost);
+    if (!result.ok) {
+      console.warn(`Credit settle declined for ${provider} (reservation ${id})`);
+      updateTelemetryMetadata(c, provider, model, rawBody, {
+        credit_settle_declined: true
+      });
+    }
+  };
 
   const route = {
     provider,
@@ -168,6 +211,7 @@ responsesApp.post('/', async (c) => {
 
     if (!response.ok) {
       await recordCircuitBreakerFailure(c.env, route.provider);
+      await settleReservation(0);
 
       const errorText = await response.text();
       const errorPayload = {
@@ -201,7 +245,10 @@ responsesApp.post('/', async (c) => {
             streamUsage = usage;
             storeTelemetryUsage(c, usage);
 
-            if (!balance.configured) return;
+            if (!balance.configured) {
+              await settleReservation(0);
+              return;
+            }
             const cost = await estimateCostFromUsage({
               env: c.env,
               provider,
@@ -209,9 +256,12 @@ responsesApp.post('/', async (c) => {
               promptTokens: usage.prompt_tokens || 0,
               completionTokens: usage.completion_tokens || 0
             });
-            await deductCredits(c.env, provider, cost);
+            await settleReservation(cost);
           },
-          onDone: () => {
+          onDone: async () => {
+            if (!settled) {
+              await settleReservation(0);
+            }
             storeResponseData(c, {
               stream: true,
               output: streamOutput,
@@ -219,7 +269,12 @@ responsesApp.post('/', async (c) => {
             });
             resolveTelemetryCompletion?.();
           },
-          onError: (error) => {
+          onError: async (error) => {
+            if (!settled && reservationId) {
+              await releaseCreditsReservation(c.env, provider, reservationId);
+              reservationId = undefined;
+              settled = true;
+            }
             storeResponseData(c, {
               stream: true,
               output: streamOutput,
@@ -255,7 +310,9 @@ responsesApp.post('/', async (c) => {
         promptTokens: responseData.usage.prompt_tokens || 0,
         completionTokens: responseData.usage.completion_tokens || 0
       });
-      await deductCredits(c.env, provider, cost);
+      await settleReservation(cost);
+    } else {
+      await settleReservation(0);
     }
 
     c.header('X-Corvo-Provider', provider);
@@ -264,6 +321,7 @@ responsesApp.post('/', async (c) => {
     return c.json(responseData);
 
   } catch (error) {
+    await settleReservation(estimateForReservation);
     await recordCircuitBreakerFailure(c.env, provider);
 
     const errorPayload = {

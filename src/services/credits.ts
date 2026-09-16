@@ -3,9 +3,19 @@ import { ledgerIdForProvider } from '../durable-objects/credit-ledger';
 
 export interface CreditBalance {
   balance: number;
+  available: number;
+  reserved: number;
   currency: 'USD' | 'credits';
   lastUpdated: string;
   configured: boolean;
+  exhausted: boolean;
+}
+
+export interface CreditReservation {
+  ok: boolean;
+  reservationId?: string;
+  available?: number;
+  reason?: 'exhausted' | 'insufficient' | 'unconfigured' | 'error';
 }
 
 export interface OpenRouterCreditSnapshot {
@@ -18,18 +28,46 @@ export interface OpenRouterCreditSnapshot {
 const OPENROUTER_CREDITS_CACHE_KEY = 'credits:openrouter:snapshot';
 const OPENROUTER_CREDITS_SYNC_TTL_MS = 60_000;
 
+const LEDGER_PROVIDERS: LLMProvider[] = [
+  'anthropic-direct',
+  'openai-direct',
+  'z-ai-pro',
+  'openrouter',
+  'minimax',
+  'fireworks'
+];
+
+function ledgerRequestInit(path: string, body: unknown): Request {
+  return new Request(`https://credit-ledger${path}`, {
+    method: 'POST',
+    body: JSON.stringify(body)
+  });
+}
+
 export async function getCreditBalance(env: Env, provider: LLMProvider): Promise<CreditBalance> {
   if (!env.CREDIT_LEDGER) {
     return {
       balance: 0,
+      available: 0,
+      reserved: 0,
       currency: 'USD',
       lastUpdated: new Date().toISOString(),
-      configured: false
+      configured: false,
+      exhausted: false
     };
   }
   const stub = env.CREDIT_LEDGER.get(env.CREDIT_LEDGER.idFromName(ledgerIdForProvider(provider)));
   const response = await stub.fetch(new Request('https://credit-ledger/balance', { method: 'GET' }));
-  return await response.json() as CreditBalance;
+  const payload = await response.json() as Partial<CreditBalance>;
+  return {
+    balance: payload.balance ?? 0,
+    available: payload.available ?? payload.balance ?? 0,
+    reserved: payload.reserved ?? 0,
+    currency: payload.currency ?? 'USD',
+    lastUpdated: payload.lastUpdated ?? new Date().toISOString(),
+    configured: payload.configured ?? false,
+    exhausted: payload.exhausted ?? false
+  };
 }
 
 export async function setCreditBalance(env: Env, provider: LLMProvider, balance: number, currency: 'USD' | 'credits'): Promise<CreditBalance> {
@@ -61,10 +99,7 @@ export async function deductCredits(env: Env, provider: LLMProvider, cost: numbe
     return { ok: false };
   }
   const stub = env.CREDIT_LEDGER.get(env.CREDIT_LEDGER.idFromName(ledgerIdForProvider(provider)));
-  const response = await stub.fetch(new Request('https://credit-ledger/deduct', {
-    method: 'POST',
-    body: JSON.stringify({ cost })
-  }));
+  const response = await stub.fetch(ledgerRequestInit('/deduct', { cost }));
 
   if (!response.ok) {
     return { ok: false };
@@ -74,16 +109,123 @@ export async function deductCredits(env: Env, provider: LLMProvider, cost: numbe
   return { ok: true, balance };
 }
 
-export async function markProviderCreditsExhausted(env: Env, provider: LLMProvider): Promise<void> {
+export async function reserveCredits(
+  env: Env,
+  provider: LLMProvider,
+  amount: number
+): Promise<CreditReservation> {
+  if (!env.CREDIT_LEDGER) {
+    return { ok: false, reason: 'unconfigured' };
+  }
+
+  const stub = env.CREDIT_LEDGER.get(env.CREDIT_LEDGER.idFromName(ledgerIdForProvider(provider)));
+  let response: Response;
   try {
-    await setCreditBalance(env, provider, 0, 'USD');
+    response = await stub.fetch(ledgerRequestInit('/reserve', { amount }));
+  } catch {
+    return { ok: false, reason: 'error' };
+  }
+
+  if (response.status === 402) {
+    let payload: { error?: string } = {};
+    try {
+      payload = await response.json() as { error?: string };
+    } catch {
+      payload = {};
+    }
+    return {
+      ok: false,
+      reason: payload.error === 'Provider credits exhausted' ? 'exhausted' : 'insufficient'
+    };
+  }
+
+  if (!response.ok) {
+    return { ok: false, reason: 'error' };
+  }
+
+  const payload = await response.json() as { reservationId?: string; available?: number };
+  if (!payload.reservationId) {
+    return { ok: false, reason: 'error' };
+  }
+
+  return { ok: true, reservationId: payload.reservationId, available: payload.available };
+}
+
+export async function settleCredits(
+  env: Env,
+  provider: LLMProvider,
+  reservationId: string,
+  actualCost: number
+): Promise<{ ok: boolean; balance?: CreditBalance }> {
+  if (!env.CREDIT_LEDGER) {
+    return { ok: false };
+  }
+
+  const stub = env.CREDIT_LEDGER.get(env.CREDIT_LEDGER.idFromName(ledgerIdForProvider(provider)));
+  let response: Response;
+  try {
+    response = await stub.fetch(ledgerRequestInit('/settle', { reservationId, actualCost }));
+  } catch {
+    return { ok: false };
+  }
+
+  if (!response.ok) {
+    return { ok: false };
+  }
+
+  const balance = await response.json() as CreditBalance;
+  return { ok: true, balance };
+}
+
+export async function releaseCreditsReservation(
+  env: Env,
+  provider: LLMProvider,
+  reservationId: string
+): Promise<void> {
+  try {
+    await settleCredits(env, provider, reservationId, 0);
+  } catch {
+    // Reservation TTL will reclaim it if the ledger is unreachable.
+  }
+}
+
+export async function markProviderCreditsExhausted(env: Env, provider: LLMProvider): Promise<void> {
+  if (!env.CREDIT_LEDGER) return;
+  try {
+    const stub = env.CREDIT_LEDGER.get(env.CREDIT_LEDGER.idFromName(ledgerIdForProvider(provider)));
+    await stub.fetch(ledgerRequestInit('/markExhausted', {}));
   } catch {
     // Best-effort only; routing can still fallback on live upstream errors.
   }
 }
 
-export function isCreditExhaustionResponse(status: number, errorText: string): boolean {
+export async function clearProviderExhaustion(env: Env, provider: LLMProvider): Promise<void> {
+  if (!env.CREDIT_LEDGER) return;
+  try {
+    const stub = env.CREDIT_LEDGER.get(env.CREDIT_LEDGER.idFromName(ledgerIdForProvider(provider)));
+    await stub.fetch(ledgerRequestInit('/clearExhausted', {}));
+  } catch {
+    // Best-effort recovery; the exhaustion TTL is the fallback.
+  }
+}
+
+export async function clearAllProviderExhaustion(env: Env): Promise<void> {
+  await Promise.all(LEDGER_PROVIDERS.map((provider) => clearProviderExhaustion(env, provider)));
+}
+
+const STRONG_BILLING_SIGNALS = ['insufficient credit', 'insufficient funds', 'payment required'];
+const EXHAUSTION_CONFIRMATIONS_REQUIRED = 3;
+const EXHAUSTION_CONFIRMATION_WINDOW_MS = 60_000;
+
+const exhaustionConfirmations = new Map<LLMProvider, { count: number; firstAt: number }>();
+
+export function resetCreditExhaustionTracking(provider: LLMProvider): void {
+  exhaustionConfirmations.delete(provider);
+}
+
+export function isCreditExhaustionResponse(provider: LLMProvider, status: number, errorText: string): boolean {
   if (status === 402) {
+    exhaustionConfirmations.delete(provider);
     return true;
   }
 
@@ -92,12 +234,21 @@ export function isCreditExhaustionResponse(status: number, errorText: string): b
   }
 
   const normalized = errorText.toLowerCase();
-  return normalized.includes('insufficient credit')
-    || normalized.includes('insufficient funds')
-    || normalized.includes('credit balance')
-    || normalized.includes('quota')
-    || normalized.includes('billing')
-    || normalized.includes('payment required');
+  const isStrongBillingSignal = STRONG_BILLING_SIGNALS.some((signal) => normalized.includes(signal));
+  if (!isStrongBillingSignal) {
+    exhaustionConfirmations.delete(provider);
+    return false;
+  }
+
+  const now = Date.now();
+  const existing = exhaustionConfirmations.get(provider);
+  if (!existing || now - existing.firstAt > EXHAUSTION_CONFIRMATION_WINDOW_MS) {
+    exhaustionConfirmations.set(provider, { count: 1, firstAt: now });
+    return false;
+  }
+
+  existing.count += 1;
+  return existing.count >= EXHAUSTION_CONFIRMATIONS_REQUIRED;
 }
 
 export async function syncOpenRouterCreditsIfStale(env: Env): Promise<OpenRouterCreditSnapshot | null> {

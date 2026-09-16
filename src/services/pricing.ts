@@ -53,6 +53,65 @@ export async function estimateCostFromUsage(params: {
   return inputCost + outputCost;
 }
 
+const DEFAULT_ESTIMATED_COMPLETION_TOKENS = 4_096;
+const ESTIMATED_TOKENS_PER_IMAGE = 1_000;
+const CHARS_PER_TOKEN = 4;
+
+/**
+ * Upper-bound cost estimate used to size credit reservations before an
+ * upstream call: estimated prompt tokens + the requested max_tokens (or a
+ * conservative default when unset).
+ */
+export async function estimateRequestMaxCost(params: {
+  env: Env;
+  provider: LLMProvider;
+  model: string;
+  input: unknown;
+  maxTokens?: number;
+}): Promise<number> {
+  const pricing = await getModelPricing(params.env, params.provider, params.model);
+  const promptTokens = estimatePromptTokens(params.input);
+  const completionTokens = params.maxTokens && params.maxTokens > 0
+    ? params.maxTokens
+    : DEFAULT_ESTIMATED_COMPLETION_TOKENS;
+
+  return (promptTokens / 1_000_000) * pricing.input + (completionTokens / 1_000_000) * pricing.output;
+}
+
+export function estimatePromptTokens(input: unknown): number {
+  if (typeof input === 'string') {
+    return Math.ceil(input.length / CHARS_PER_TOKEN);
+  }
+
+  if (!Array.isArray(input)) {
+    return 0;
+  }
+
+  let chars = 0;
+  for (const message of input) {
+    const content = (message as { content?: unknown })?.content;
+    if (typeof content === 'string') {
+      chars += content.length;
+      continue;
+    }
+    if (!Array.isArray(content)) continue;
+
+    for (const part of content) {
+      const text = (part as { text?: unknown })?.text;
+      if (typeof text === 'string') {
+        chars += text.length;
+        continue;
+      }
+      const imageUrl = (part as { image_url?: { url?: unknown } })?.image_url?.url;
+      if (typeof imageUrl === 'string') {
+        chars += ESTIMATED_TOKENS_PER_IMAGE * CHARS_PER_TOKEN;
+      }
+    }
+  }
+
+  return Math.ceil(chars / CHARS_PER_TOKEN);
+}
+
 function findModelPricing(pricing: ProviderPricing, model: string): PricingEntry | null {
   for (const [modelId, value] of Object.entries(pricing)) {
     if (modelId !== model) continue;

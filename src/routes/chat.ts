@@ -10,12 +10,15 @@ import {
   setTelemetryCompletion
 } from '../middleware/telemetry';
 import { determineProvider } from '../services/router';
-import { estimateCostFromUsage } from '../services/pricing';
+import { estimateCostFromUsage, estimateRequestMaxCost } from '../services/pricing';
 import {
-  deductCredits,
   getCreditBalance,
   isCreditExhaustionResponse,
-  markProviderCreditsExhausted
+  markProviderCreditsExhausted,
+  reserveCredits,
+  settleCredits,
+  releaseCreditsReservation,
+  resetCreditExhaustionTracking
 } from '../services/credits';
 import { getAdapterForProvider } from '../utils/transform';
 import { resolveModelAlias } from '../utils/model-aliases';
@@ -223,6 +226,12 @@ async function handleHeaderDrivenRequest(
     request_role: routePlan.requestRole
   });
 
+  let winnerReservation: { provider: LLMProvider; reservationId: string } | null = null;
+  let reservationClaimed = false;
+  const claimWinnerReservation = (): { provider: LLMProvider; reservationId: string } | null => {
+    return winnerReservation;
+  };
+
   const executionResult = await executeRoutePlan<unknown>({
     plan: routePlan,
     attempt: async (candidate, context) => {
@@ -234,9 +243,38 @@ async function handleHeaderDrivenRequest(
       }
 
       const providerBalance = await getCreditBalance(c.env, route.provider);
-      if (providerBalance.configured && providerBalance.balance <= 0) {
+      if (providerBalance.exhausted || (providerBalance.configured && providerBalance.available <= 0)) {
         return createFailureResult('upstream_5xx', 'Provider credits exhausted', false);
       }
+
+      let reservationId: string | undefined;
+      if (providerBalance.configured) {
+        const estimate = await estimateRequestMaxCost({
+          env: c.env,
+          provider: route.provider,
+          model: candidate.model,
+          input: body.messages,
+          maxTokens: body.max_tokens
+        });
+        const reservation = await reserveCredits(c.env, route.provider, estimate);
+        if (!reservation.ok || !reservation.reservationId) {
+          updateTelemetryMetadata(c, route.provider, candidate.model, rawBody, {
+            credit_reservation_declined: reservation.reason || 'error'
+          });
+          return createFailureResult('upstream_5xx', 'Insufficient provider credits', false);
+        }
+        reservationId = reservation.reservationId;
+      }
+
+      const claimOrReleaseReservation = (): void => {
+        if (!reservationId) return;
+        if (!reservationClaimed) {
+          reservationClaimed = true;
+          winnerReservation = { provider: route.provider, reservationId };
+          return;
+        }
+        void releaseCreditsReservation(c.env, route.provider, reservationId);
+      };
 
       const adapter = getAdapterForProvider(route.provider);
       const providerRequest = adapter.transformRequest({ ...body, model: candidate.model });
@@ -250,22 +288,26 @@ async function handleHeaderDrivenRequest(
           signal: context.signal as RequestInit['signal']
         });
       } catch (error) {
+        if (reservationId) void releaseCreditsReservation(c.env, route.provider, reservationId);
         await recordCircuitBreakerFailure(c.env, route.provider);
         return classifyUnknownFailure(error);
       }
 
       if (!response.ok) {
+        if (reservationId) void releaseCreditsReservation(c.env, route.provider, reservationId);
         await recordCircuitBreakerFailure(c.env, route.provider);
         const details = await response.text().catch(() => 'Unknown upstream error');
         return classifyStatusFailure(response.status, details);
       }
 
       await recordCircuitBreakerSuccess(c.env, route.provider);
+      resetCreditExhaustionTracking(route.provider);
 
       const cacheHit = toAttemptCacheHit(parseCacheHit(response.headers));
       const ttftMs = parseTtftMs(response.headers);
 
       if (body.stream) {
+        claimOrReleaseReservation();
         return createSuccessResult({
           provider: candidate.provider,
           model: candidate.model,
@@ -275,8 +317,16 @@ async function handleHeaderDrivenRequest(
         });
       }
 
-      const upstreamJson = await response.json();
+      let upstreamJson: unknown;
+      try {
+        upstreamJson = await response.json();
+      } catch (error) {
+        if (reservationId) void releaseCreditsReservation(c.env, route.provider, reservationId);
+        throw error;
+      }
       const transformed = adapter.transformResponse(upstreamJson, candidate.model);
+
+      claimOrReleaseReservation();
 
       return createSuccessResult({
         provider: candidate.provider,
@@ -349,6 +399,23 @@ async function handleHeaderDrivenRequest(
     schema_valid: true
   });
 
+  const claimedReservation = claimWinnerReservation();
+  const winnerReservationId = claimedReservation?.reservationId;
+  const finalBalance = await getCreditBalance(c.env, winnerProvider);
+  let settled = false;
+
+  const settleWinnerReservation = async (actualCost: number): Promise<void> => {
+    if (!winnerReservationId) return;
+    settled = true;
+    const result = await settleCredits(c.env, winnerProvider, winnerReservationId, actualCost);
+    if (!result.ok) {
+      console.warn(`Credit settle declined for ${winnerProvider} (reservation ${winnerReservationId})`);
+      updateTelemetryMetadata(c, winnerProvider, executionResult.winner.model, rawBody, {
+        credit_settle_declined: true
+      });
+    }
+  };
+
   if (body.stream) {
     const upstreamResponse = executionResult.value as Response;
 
@@ -370,8 +437,10 @@ async function handleHeaderDrivenRequest(
           streamUsage = usage;
           storeTelemetryUsage(c, usage);
 
-          const balance = await getCreditBalance(c.env, winnerProvider);
-          if (!balance.configured) return;
+          if (!finalBalance.configured) {
+            await settleWinnerReservation(0);
+            return;
+          }
 
           const cost = await estimateCostFromUsage({
             env: c.env,
@@ -381,9 +450,12 @@ async function handleHeaderDrivenRequest(
             completionTokens: usage.completion_tokens || 0
           });
 
-          await deductCredits(c.env, winnerProvider, cost);
+          await settleWinnerReservation(cost);
         },
-        onDone: () => {
+        onDone: async () => {
+          if (!settled) {
+            await settleWinnerReservation(0);
+          }
           storeResponseData(c, {
             stream: true,
             output: streamOutput,
@@ -391,7 +463,10 @@ async function handleHeaderDrivenRequest(
           });
           resolveTelemetryCompletion?.();
         },
-        onError: (error) => {
+        onError: async (error) => {
+          if (!settled && winnerReservationId) {
+            await releaseCreditsReservation(c.env, winnerProvider, winnerReservationId);
+          }
           storeResponseData(c, {
             stream: true,
             output: streamOutput,
@@ -430,7 +505,6 @@ async function handleHeaderDrivenRequest(
     storeTelemetryUsage(c, responsePayload.usage);
   }
 
-  const finalBalance = await getCreditBalance(c.env, winnerProvider);
   if (finalBalance.configured && responsePayload.usage) {
     const cost = await estimateCostFromUsage({
       env: c.env,
@@ -439,7 +513,9 @@ async function handleHeaderDrivenRequest(
       promptTokens: responsePayload.usage.prompt_tokens || 0,
       completionTokens: responsePayload.usage.completion_tokens || 0
     });
-    await deductCredits(c.env, winnerProvider, cost);
+    await settleWinnerReservation(cost);
+  } else {
+    await settleWinnerReservation(0);
   }
 
   setCorvoHeadersOnContext(c, {
@@ -534,7 +610,7 @@ async function handleLegacyRequest(
   }
 
   const preBalance = await getCreditBalance(c.env, route.provider);
-  if (preBalance.configured && preBalance.balance <= 0 && route.provider !== 'openrouter') {
+  if ((preBalance.exhausted || (preBalance.configured && preBalance.available <= 0)) && route.provider !== 'openrouter') {
     if (client.fallbackStrategy === 'fail-fast') {
       const errorPayload = {
         error: 'Payment Required',
@@ -567,8 +643,8 @@ async function handleLegacyRequest(
   }
 
   const adapter = getAdapterForProvider(route.provider);
-  const finalBalance = await getCreditBalance(c.env, route.provider);
-  const providerRequest = adapter.transformRequest({ ...body, model });
+  let finalBalance = await getCreditBalance(c.env, route.provider);
+  let providerRequest = adapter.transformRequest({ ...body, model });
   const concurrency = await acquireProviderConcurrencyLease(c.env, route.provider, model);
 
   if (!concurrency.allowed) {
@@ -599,6 +675,75 @@ async function handleLegacyRequest(
     await releaseProviderConcurrencyLease(c.env, leaseToRelease);
   };
 
+  let reservationId: string | undefined;
+  let estimateForReservation = 0;
+  if (finalBalance.configured && route.provider !== 'openrouter') {
+    const estimate = await estimateRequestMaxCost({
+      env: c.env,
+      provider: route.provider,
+      model,
+      input: body.messages,
+      maxTokens: body.max_tokens
+    });
+    const reservation = await reserveCredits(c.env, route.provider, estimate);
+    if (!reservation.ok || !reservation.reservationId) {
+      await releaseConcurrencyLease();
+      updateTelemetryMetadata(c, route.provider, model, rawBody, {
+        credit_reservation_declined: reservation.reason || 'error'
+      });
+
+      if (client.fallbackStrategy === 'fail-fast') {
+        const errorPayload = {
+          error: 'Payment Required',
+          message: 'Provider credits exhausted. Fail-fast policy enabled.',
+          provider: route.provider
+        };
+        storeResponseData(c, errorPayload);
+        setCorvoHeadersOnContext(c, {
+          provider: route.provider,
+          model,
+          routeId,
+          fallbackUsed: false,
+          hedgeUsed: false,
+          latencyMs: Date.now() - requestStart
+        });
+        return c.json(errorPayload, 402);
+      }
+
+      route = {
+        provider: 'openrouter',
+        url: 'https://openrouter.ai/api/v1/chat/completions',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${c.env.OPENROUTER_API_KEY}`,
+          'HTTP-Referer': 'https://cortex.corvolabs.com',
+          'X-Title': 'Corvo Cortex'
+        },
+        fallback: { reason: 'insufficient_credits', from: route.provider }
+      };
+      finalBalance = await getCreditBalance(c.env, route.provider);
+      providerRequest = getAdapterForProvider(route.provider).transformRequest({ ...body, model });
+    } else {
+      reservationId = reservation.reservationId;
+      estimateForReservation = estimate;
+    }
+  }
+
+  let settled = false;
+  const settleReservation = async (actualCost: number): Promise<void> => {
+    if (!reservationId) return;
+    const id = reservationId;
+    reservationId = undefined;
+    settled = true;
+    const result = await settleCredits(c.env, route.provider, id, actualCost);
+    if (!result.ok) {
+      console.warn(`Credit settle declined for ${route.provider} (reservation ${id})`);
+      updateTelemetryMetadata(c, route.provider, model, rawBody, {
+        credit_settle_declined: true
+      });
+    }
+  };
+
   try {
     const response = await fetchWithRetry(
       route.url,
@@ -620,12 +765,13 @@ async function handleLegacyRequest(
 
     if (!response.ok) {
       const errorText = await response.text();
+      await settleReservation(0);
 
       if (
         !hasRetriedCreditFallback
         && route.provider !== 'openrouter'
         && client.fallbackStrategy !== 'fail-fast'
-        && isCreditExhaustionResponse(response.status, errorText)
+        && isCreditExhaustionResponse(route.provider, response.status, errorText)
       ) {
         await markProviderCreditsExhausted(c.env, route.provider);
         await releaseConcurrencyLease();
@@ -654,6 +800,7 @@ async function handleLegacyRequest(
     }
 
     await recordCircuitBreakerSuccess(c.env, route.provider);
+    resetCreditExhaustionTracking(route.provider);
 
     if (body.stream) {
       let resolveTelemetryCompletion: (() => void) | undefined;
@@ -674,7 +821,11 @@ async function handleLegacyRequest(
             streamUsage = usage;
             storeTelemetryUsage(c, usage);
 
-            if (!finalBalance.configured) return;
+            if (!finalBalance.configured) {
+              await settleReservation(0);
+              return;
+            }
+
             const cost = await estimateCostFromUsage({
               env: c.env,
               provider: route.provider,
@@ -682,9 +833,12 @@ async function handleLegacyRequest(
               promptTokens: usage.prompt_tokens || 0,
               completionTokens: usage.completion_tokens || 0
             });
-            await deductCredits(c.env, route.provider, cost);
+            await settleReservation(cost);
           },
           onDone: async () => {
+            if (!settled) {
+              await settleReservation(0);
+            }
             storeResponseData(c, {
               stream: true,
               output: streamOutput,
@@ -694,6 +848,11 @@ async function handleLegacyRequest(
             resolveTelemetryCompletion?.();
           },
           onError: async (error) => {
+            if (!settled && reservationId) {
+              await releaseCreditsReservation(c.env, route.provider, reservationId);
+              reservationId = undefined;
+              settled = true;
+            }
             storeResponseData(c, {
               stream: true,
               output: streamOutput,
@@ -750,7 +909,9 @@ async function handleLegacyRequest(
         promptTokens: openaiResponse.usage.prompt_tokens || 0,
         completionTokens: openaiResponse.usage.completion_tokens || 0
       });
-      await deductCredits(c.env, route.provider, cost);
+      await settleReservation(cost);
+    } else {
+      await settleReservation(0);
     }
 
     setCorvoHeadersOnContext(c, {
@@ -766,6 +927,7 @@ async function handleLegacyRequest(
 
     return c.json(openaiResponse);
   } catch (error) {
+    await settleReservation(estimateForReservation);
     await recordCircuitBreakerFailure(c.env, route.provider);
 
     const errorPayload = {

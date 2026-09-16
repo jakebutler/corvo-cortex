@@ -31,7 +31,7 @@ export async function determineProvider(
   // 0. Fireworks preemption (if model in catalog and credits available)
   if (await isFireworksModel(env, model)) {
     const balance = await getCreditBalance(env, 'fireworks');
-    if (!balance.configured || balance.balance > 0) {
+    if (!balance.configured || balance.available > 0) {
       return {
         provider: 'fireworks',
         url: 'https://api.fireworks.ai/inference/v1/chat/completions',
