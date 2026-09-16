@@ -18,6 +18,46 @@ const adminApp = new Hono<{ Bindings: Env }>();
 adminApp.use('*', adminAuthMiddleware);
 
 const PROVIDERS: LLMProvider[] = ['anthropic-direct', 'openai-direct', 'z-ai-pro', 'openrouter', 'minimax', 'fireworks'];
+const SANE_CREDIT_LIMIT = 1_000_000;
+
+function maskApiKey(key: string): string {
+  if (key.length <= 10) {
+    return `${key.slice(0, 2)}…${key.slice(-2)}`;
+  }
+  return `${key.slice(0, 6)}…${key.slice(-4)}`;
+}
+
+function publicClientFields(client: unknown): Record<string, unknown> | null {
+  if (!client || typeof client !== 'object') return null;
+  const record = client as Record<string, unknown>;
+  return {
+    appId: record.appId,
+    name: record.name,
+    defaultModel: record.defaultModel,
+    allowZai: record.allowZai,
+    allowedModels: record.allowedModels,
+    fallbackStrategy: record.fallbackStrategy,
+    rateLimit: record.rateLimit
+  };
+}
+
+async function auditAdminAction(
+  action: string,
+  details: Record<string, unknown>
+): Promise<void> {
+  const entry = {
+    timestamp: new Date().toISOString(),
+    actor: 'admin',
+    action,
+    ...details
+  };
+  console.warn(JSON.stringify({ source: 'admin-audit', ...entry }));
+}
+
+function summarizePricing(pricing: ProviderPricing | null): string {
+  if (!pricing) return 'none';
+  return JSON.stringify(pricing).slice(0, 200);
+}
 
 /**
  * GET /admin/usage
@@ -32,12 +72,12 @@ adminApp.get('/usage', async (c) => {
     const rateLimitKey = `ratelimit:${apiKey}:${minute}`;
     const usage = await c.env.CORTEX_CLIENTS.get(rateLimitKey, { type: 'json' }) as RateLimitUsage | null;
 
-    // Also get client info
+    // Also get client info (non-sensitive fields only; never return raw keys)
     const client = await c.env.CORTEX_CLIENTS.get(apiKey, { type: 'json' });
 
     return c.json({
-      apiKey,
-      client,
+      apiKey: maskApiKey(apiKey),
+      client: publicClientFields(client),
       currentMinute: new Date(minute * 1000).toISOString(),
       usage: usage || { requests: 0, tokens: 0 }
     });
@@ -55,8 +95,8 @@ adminApp.get('/usage', async (c) => {
       const client = await c.env.CORTEX_CLIENTS.get(key, { type: 'json' });
 
       return {
-        apiKey: key,
-        client,
+        apiKey: maskApiKey(key),
+        client: publicClientFields(client),
         usage: usage || { requests: 0, tokens: 0 }
       };
     })
@@ -108,15 +148,30 @@ adminApp.get('/credits', async (c) => {
  * Set the credit balance for a provider
  */
 adminApp.post('/credits/set', async (c) => {
-  const body = await c.req.json() as { provider?: LLMProvider; balance?: number; currency?: 'USD' | 'credits' };
+  const body = await c.req.json() as {
+    provider?: LLMProvider;
+    balance?: number;
+    currency?: 'USD' | 'credits';
+    override?: boolean;
+  };
   if (!body.provider || typeof body.balance !== 'number' || !body.currency) {
     return c.json({ error: 'Invalid payload' }, 400);
   }
   if (!PROVIDERS.includes(body.provider)) {
     return c.json({ error: 'Unknown provider' }, 400);
   }
+  if (Math.abs(body.balance) > SANE_CREDIT_LIMIT && body.override !== true) {
+    return c.json({ error: 'Balance exceeds sane limit; pass override: true to confirm' }, 400);
+  }
 
+  const before = await getCreditBalance(c.env, body.provider);
   const balance = await setCreditBalance(c.env, body.provider, body.balance, body.currency);
+  await auditAdminAction('credits.set', {
+    provider: body.provider,
+    from: before.balance,
+    to: body.balance,
+    override: body.override === true
+  });
   return c.json({ provider: body.provider, ...balance });
 });
 
@@ -125,15 +180,31 @@ adminApp.post('/credits/set', async (c) => {
  * Adjust the credit balance for a provider
  */
 adminApp.post('/credits/adjust', async (c) => {
-  const body = await c.req.json() as { provider?: LLMProvider; delta?: number; currency?: 'USD' | 'credits' };
+  const body = await c.req.json() as {
+    provider?: LLMProvider;
+    delta?: number;
+    currency?: 'USD' | 'credits';
+    override?: boolean;
+  };
   if (!body.provider || typeof body.delta !== 'number') {
     return c.json({ error: 'Invalid payload' }, 400);
   }
   if (!PROVIDERS.includes(body.provider)) {
     return c.json({ error: 'Unknown provider' }, 400);
   }
+  if (Math.abs(body.delta) > SANE_CREDIT_LIMIT && body.override !== true) {
+    return c.json({ error: 'Delta exceeds sane limit; pass override: true to confirm' }, 400);
+  }
 
+  const before = await getCreditBalance(c.env, body.provider);
   const balance = await adjustCreditBalance(c.env, body.provider, body.delta, body.currency);
+  await auditAdminAction('credits.adjust', {
+    provider: body.provider,
+    from: before.balance,
+    delta: body.delta,
+    to: balance.balance,
+    override: body.override === true
+  });
   return c.json({ provider: body.provider, ...balance });
 });
 
@@ -153,6 +224,8 @@ adminApp.post('/credits/sync', async (c) => {
   if (!snapshot) {
     return c.json({ error: 'Failed to sync OpenRouter credits' }, 502);
   }
+
+  await auditAdminAction('credits.sync', { provider: 'openrouter', remaining: snapshot.remainingCredits });
 
   const balance = await getCreditBalance(c.env, 'openrouter');
   return c.json({
@@ -184,7 +257,11 @@ adminApp.get('/pricing', async (c) => {
  * Replace pricing for a provider
  */
 adminApp.post('/pricing', async (c) => {
-  const body = await c.req.json() as { provider?: LLMProvider; pricing?: ProviderPricing };
+  const body = await c.req.json() as {
+    provider?: LLMProvider;
+    pricing?: ProviderPricing;
+    allowZero?: boolean;
+  };
   if (!body.provider || !body.pricing || typeof body.pricing !== 'object') {
     return c.json({ error: 'Invalid payload' }, 400);
   }
@@ -192,7 +269,32 @@ adminApp.post('/pricing', async (c) => {
     return c.json({ error: 'Unknown provider' }, 400);
   }
 
+  const invalidEntries = Object.entries(body.pricing)
+    .filter(([, value]) => value && typeof value === 'object')
+    .filter(([, value]) => {
+      const entry = value as { input?: unknown; output?: unknown };
+      return typeof entry.input !== 'number' || typeof entry.output !== 'number'
+        || !Number.isFinite(entry.input) || !Number.isFinite(entry.output)
+        || entry.input < 0 || entry.output < 0
+        || ((entry.input === 0 || entry.output === 0) && body.allowZero !== true);
+    })
+    .map(([key]) => key);
+
+  if (invalidEntries.length > 0) {
+    return c.json({
+      error: 'Pricing entries must be positive numbers (zero requires allowZero: true)',
+      entries: invalidEntries
+    }, 400);
+  }
+
+  const before = await getProviderPricing(c.env, body.provider);
   await c.env.CORTEX_CONFIG.put(`pricing:${body.provider}`, JSON.stringify(body.pricing));
+  await auditAdminAction('pricing.replace', {
+    provider: body.provider,
+    models: Object.keys(body.pricing),
+    before_digest: summarizePricing(before),
+    allow_zero: body.allowZero === true
+  });
   return c.json({ provider: body.provider, pricing: body.pricing });
 });
 
@@ -205,6 +307,7 @@ adminApp.post('/models/refresh', async (c) => {
   const providers = body.providers && Array.isArray(body.providers) ? body.providers : undefined;
 
   const results = await refreshAllModelCatalogs(c.env, providers);
+  await auditAdminAction('models.refresh', { providers: providers || 'all' });
   return c.json({ results });
 });
 
@@ -237,7 +340,13 @@ adminApp.post('/routing-policy', async (c) => {
   }
 
   const key = getRoutingPolicyConfigKey(c.env);
+  const previous = await getRoutingPolicy(c.env);
   await c.env.CORTEX_CONFIG.put(key, JSON.stringify(validation.data));
+  await auditAdminAction('routing-policy.replace', {
+    key,
+    previous_version: previous.version,
+    new_version: validation.data.version
+  });
 
   return c.json({ key, policy: validation.data });
 });

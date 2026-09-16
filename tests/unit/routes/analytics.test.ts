@@ -10,8 +10,7 @@ describe('Analytics Route - /analytics', () => {
     function createMockEnv(overrides: Partial<Env> = {}): Env {
         return {
             CORTEX_CLIENTS: createMockKV({
-                [TEST_API_KEY]: createMockClientConfig(),
-                [ADMIN_API_KEY]: createMockClientConfig({ admin: true })
+                [TEST_API_KEY]: createMockClientConfig()
             }),
             CORTEX_CONFIG: createMockKV(),
             ANTHROPIC_API_KEY: 'test',
@@ -21,6 +20,7 @@ describe('Analytics Route - /analytics', () => {
             LANGFUSE_PUBLIC_KEY: 'test',
             LANGFUSE_SECRET_KEY: 'test',
             CIRCUIT_BREAKER: {} as unknown as DurableObjectNamespace,
+            ADMIN_API_KEY: ADMIN_API_KEY,
             ENVIRONMENT: 'test',
             ...overrides
         } as Env;
@@ -41,7 +41,7 @@ describe('Analytics Route - /analytics', () => {
             expect(response.status).toBe(401);
         });
 
-        it('should return 403 for non-admin API key', async () => {
+        it('should return 401 for a valid client key that is not the admin secret', async () => {
             const request = new Request('http://localhost/costs', {
                 method: 'GET',
                 headers: { 'Authorization': `Bearer ${TEST_API_KEY}` }
@@ -49,7 +49,7 @@ describe('Analytics Route - /analytics', () => {
 
             const response = await analyticsApp.fetch(request, mockEnv);
 
-            expect(response.status).toBe(403);
+            expect(response.status).toBe(401);
         });
     });
 

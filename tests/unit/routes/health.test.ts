@@ -10,8 +10,7 @@ describe('Health Route - /health', () => {
     function createMockEnv(overrides: Partial<Env> = {}): Env {
         return {
             CORTEX_CLIENTS: createMockKV({
-                [TEST_API_KEY]: createMockClientConfig(),
-                [ADMIN_API_KEY]: createMockClientConfig({ admin: true })
+                [TEST_API_KEY]: createMockClientConfig()
             }),
             CORTEX_CONFIG: createMockKV(),
             ANTHROPIC_API_KEY: 'test-anthropic-key',
@@ -21,6 +20,7 @@ describe('Health Route - /health', () => {
             LANGFUSE_PUBLIC_KEY: 'test-langfuse-public',
             LANGFUSE_SECRET_KEY: 'test-langfuse-secret',
             CIRCUIT_BREAKER: createMockCircuitBreaker(),
+            ADMIN_API_KEY: ADMIN_API_KEY,
             ENVIRONMENT: 'test',
             ...overrides
         } as Env;
@@ -54,7 +54,7 @@ describe('Health Route - /health', () => {
             expect(response.status).toBe(401);
         });
 
-        it('should return 403 for non-admin API key', async () => {
+        it('should return 401 for a valid client key that is not the admin secret', async () => {
             const request = new Request('http://localhost/providers', {
                 method: 'GET',
                 headers: { 'Authorization': `Bearer ${TEST_API_KEY}` }
@@ -62,9 +62,7 @@ describe('Health Route - /health', () => {
 
             const response = await healthApp.fetch(request, mockEnv);
 
-            expect(response.status).toBe(403);
-            const json = await response.json() as { error: string };
-            expect(json.error).toContain('Admin access required');
+            expect(response.status).toBe(401);
         });
 
         it('should pass for admin API key', async () => {

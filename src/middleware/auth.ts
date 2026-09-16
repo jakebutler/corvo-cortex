@@ -122,13 +122,52 @@ export const authMiddleware: MiddlewareHandler<{ Bindings: Env; Variables: Varia
   await next();
 };
 
+const ADMIN_CLIENT: ClientConfig = {
+  appId: 'admin',
+  name: 'Admin',
+  defaultModel: 'gpt-4o',
+  allowZai: false,
+  fallbackStrategy: 'fail-fast',
+  rateLimit: {
+    requestsPerMinute: 0,
+    tokensPerMinute: 0
+  }
+};
+
+async function secureEqual(provided: string, expected: string): Promise<boolean> {
+  const webCrypto = (globalThis as {
+    crypto?: {
+      subtle?: {
+        digest: (algorithm: string, data: Uint8Array) => Promise<ArrayBuffer>;
+      };
+    };
+  }).crypto;
+  if (!webCrypto?.subtle) {
+    return provided === expected;
+  }
+  const encoder = new TextEncoder();
+  const providedDigest = await webCrypto.subtle.digest('SHA-256', encoder.encode(provided));
+  const expectedDigest = await webCrypto.subtle.digest('SHA-256', encoder.encode(expected));
+
+  const a = new Uint8Array(providedDigest);
+  const b = new Uint8Array(expectedDigest);
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) {
+    // nosemgrep: javascript.lang.security.audit.object-injection.object-injection
+    // eslint-disable-next-line security/detect-object-injection
+    diff |= a[i] ^ b[i];
+  }
+  return diff === 0;
+}
+
 /**
- * Admin auth middleware for elevated privileges
- * Checks for admin flag in client config
+ * Admin auth middleware for elevated privileges.
+ * Authenticates against the ADMIN_API_KEY secret (never a KV client record),
+ * compared in constant time. Fails closed when the secret is not configured.
  */
 export const adminAuthMiddleware: MiddlewareHandler<{ Bindings: Env; Variables: Variables }> = async (c, next) => {
   const authHeader = c.req.header('Authorization');
-  const apiKey = authHeader?.replace('Bearer ', '');
+  const apiKey = authHeader?.startsWith('Bearer ') ? authHeader.slice(7).trim() : undefined;
 
   if (!apiKey) {
     return c.json(
@@ -137,24 +176,22 @@ export const adminAuthMiddleware: MiddlewareHandler<{ Bindings: Env; Variables: 
     );
   }
 
-  const clientData = await getClientFromCacheOrKv(c.env, apiKey);
+  const expected = c.env.ADMIN_API_KEY;
+  if (!expected) {
+    return c.json(
+      { error: 'Admin API key not configured' },
+      503
+    );
+  }
 
-  if (!clientData) {
+  if (!(await secureEqual(apiKey, expected))) {
     return c.json(
       { error: 'Invalid API Key' },
       401
     );
   }
 
-  // Check if admin
-  if (!clientData.admin) {
-    return c.json(
-      { error: 'Forbidden: Admin access required' },
-      403
-    );
-  }
-
-  c.set('client', clientData);
+  c.set('client', ADMIN_CLIENT);
 
   await next();
 };
