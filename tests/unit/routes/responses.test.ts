@@ -336,7 +336,7 @@ describe('Responses Route - /v1/responses', () => {
         expect(response.headers.get('x-corvo-cortex-model')).toBe('glm-5.3-flash');
 
         const upstreamCall = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls
-            .find((call) => String(call[0]).includes('inference.do-ai.run'));
+            .find((call) => String(call[0]).includes('inference.do-ai.run') && (call[1] as RequestInit).method === 'POST');
         expect(upstreamCall).toBeDefined();
         const upstreamBody = JSON.parse(upstreamCall![1].body as string);
         expect(upstreamBody.model).toBe('glm-5.3-flash');
