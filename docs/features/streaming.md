@@ -50,24 +50,35 @@ Connection: keep-alive
 
 ## Provider Transformations
 
-Each provider has a streaming adapter that normalizes their format:
+Every provider stream is served to clients as OpenAI-compatible SSE:
 
-### OpenAI / OpenRouter
+### OpenAI / OpenRouter / Fireworks / Z.ai (GLM)
 
-Pass-through (already OpenAI format).
+Pass-through (already OpenAI-compatible wire format; bytes forwarded untouched).
 
-### Anthropic
+### Anthropic / MiniMax (Anthropic Messages wire format)
 
-Transforms Anthropic streaming events:
+The gateway interprets Anthropic SSE events and re-emits normalized OpenAI chunks:
 
 | Anthropic Event | OpenAI Chunk |
 |-----------------|--------------|
 | `content_block_delta` | `delta.content` |
-| `message_stop` | `finish_reason: "stop"` |
+| `message_start` | usage tapped (`prompt_tokens`) |
+| `message_delta` | usage tapped (`completion_tokens`) |
+| `message_stop` | `finish_reason: "stop"` + `data: [DONE]` |
 
-### Z.ai (GLM)
+Usage tapped from normalized streams feeds the credit ledger (reserve-then-settle), so streamed Anthropic-family calls are metered the same way as OpenAI-format streams.
 
-Similar to OpenAI format, minimal transformation needed.
+---
+
+## Unsupported Feature Handling
+
+Providers that cannot serve a requested feature return a **400** with an explicit `details` list instead of silently degrading the request:
+
+| Feature | OpenAI / OpenRouter / Fireworks | Anthropic / MiniMax | Z.ai |
+|---|---|---|---|
+| Image inputs (`image_url` parts) | supported | 400 | 400 |
+| Tools (`tools`, `role: 'tool'`) | supported | 400 | 400 |
 
 ---
 

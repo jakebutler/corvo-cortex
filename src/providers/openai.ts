@@ -5,6 +5,8 @@ import type { ProviderAdapter, ChatCompletionRequest, ChatCompletionResponse } f
  * Pass-through adapter since OpenAI format is the standard
  */
 export class OpenAIAdapter implements ProviderAdapter {
+  readonly wireFormat = 'openai' as const;
+
   /**
    * OpenAI uses standard format, so minimal transformation needed
    */
@@ -20,15 +22,10 @@ export class OpenAIAdapter implements ProviderAdapter {
   }
 
   /**
-   * OpenAI streaming chunks are already in correct SSE format
+   * OpenAI accepts all gateway-supported request features
    */
-  transformStreamChunk(chunk: string, _model: string): string {
-    // OpenAI SSE chunks are already in the correct format
-    // Just ensure proper formatting
-    if (chunk.startsWith('data: ')) {
-      return chunk + '\n';
-    }
-    return `data: ${chunk}\n\n`;
+  validateRequest(_request: ChatCompletionRequest): string[] {
+    return [];
   }
 }
 

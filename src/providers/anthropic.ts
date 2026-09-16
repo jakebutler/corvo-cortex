@@ -1,19 +1,24 @@
-import type { ProviderAdapter, ChatCompletionRequest, ChatCompletionResponse, ChatMessage } from './base';
+import type { ProviderAdapter, ChatCompletionRequest, ChatCompletionResponse, ChatMessage, StreamEventData } from './base';
 
 /**
  * Anthropic Messages API adapter
  * Converts between OpenAI ChatCompletion format and Anthropic Messages format
  */
 export class AnthropicAdapter implements ProviderAdapter {
+  readonly wireFormat = 'anthropic' as const;
+
   /**
    * Convert OpenAI request to Anthropic Messages format
    */
   transformRequest(request: ChatCompletionRequest): Record<string, unknown> {
-    // Extract system message if present
-    const systemMessage = request.messages.find(m => m.role === 'system');
-    const system = messageContentToText(systemMessage?.content ?? '');
+    // Anthropic takes system as a top-level string; join all system messages
+    const system = request.messages
+      .filter(m => m.role === 'system')
+      .map(m => messageContentToText(m.content))
+      .filter(text => text.length > 0)
+      .join('\n\n');
 
-    // Filter out system message from messages array
+    // Filter out system messages from messages array
     const messages = request.messages
       .filter(m => m.role !== 'system')
       .map(m => ({
@@ -21,15 +26,24 @@ export class AnthropicAdapter implements ProviderAdapter {
         content: messageContentToText(m.content)
       }));
 
-    return {
+    const payload: Record<string, unknown> = {
       model: request.model,
       messages,
-      system,
       max_tokens: request.max_tokens || 4096,
-      temperature: request.temperature,
-      stream: request.stream || false,
-      top_p: request.top_p
+      stream: request.stream || false
     };
+
+    if (system.length > 0) {
+      payload.system = system;
+    }
+    if (request.temperature !== undefined) {
+      payload.temperature = request.temperature;
+    }
+    if (request.top_p !== undefined) {
+      payload.top_p = request.top_p;
+    }
+
+    return payload;
   }
 
   /**
@@ -72,48 +86,66 @@ export class AnthropicAdapter implements ProviderAdapter {
   }
 
   /**
-   * Transform Anthropic streaming event to OpenAI SSE format
+   * Interpret one Anthropic SSE `data:` payload
    */
-  transformStreamChunk(chunk: string, model: string): string {
+  transformStreamData(data: string): StreamEventData | null {
+    let event: {
+      type?: string;
+      message_id?: string;
+      delta?: { text?: string };
+      message?: { usage?: { input_tokens?: number } };
+      usage?: { output_tokens?: number };
+    };
     try {
-      const event = JSON.parse(chunk);
-
-      if (event.type === 'content_block_delta') {
-        const delta = event.delta?.text || '';
-        const openaiChunk = {
-          id: event.message_id || 'chatcmpl-' + Date.now(),
-          object: 'chat.completion.chunk',
-          created: Math.floor(Date.now() / 1000),
-          model,
-          choices: [{
-            index: 0,
-            delta: { content: delta },
-            finish_reason: null
-          }]
-        };
-        return `data: ${JSON.stringify(openaiChunk)}\n\n`;
-      }
-
-      if (event.type === 'message_stop') {
-        const openaiChunk = {
-          id: event.message_id || 'chatcmpl-' + Date.now(),
-          object: 'chat.completion.chunk',
-          created: Math.floor(Date.now() / 1000),
-          model,
-          choices: [{
-            index: 0,
-            delta: {},
-            finish_reason: 'stop'
-          }]
-        };
-        return `data: ${JSON.stringify(openaiChunk)}\n\ndata: [DONE]\n\n`;
-      }
-
-      return '';
+      event = JSON.parse(data);
     } catch {
-      // Return raw chunk if parsing fails
-      return chunk;
+      return null;
     }
+
+    if (event.type === 'content_block_delta') {
+      return { text: event.delta?.text || '' };
+    }
+
+    if (event.type === 'message_start') {
+      const inputTokens = event.message?.usage?.input_tokens;
+      return inputTokens ? { usage: { prompt_tokens: inputTokens } } : null;
+    }
+
+    if (event.type === 'message_delta') {
+      const outputTokens = event.usage?.output_tokens;
+      return outputTokens ? { usage: { completion_tokens: outputTokens } } : null;
+    }
+
+    if (event.type === 'message_stop') {
+      return { done: true };
+    }
+
+    return null;
+  }
+
+  /**
+   * Surface unsupported features instead of silently dropping them
+   */
+  validateRequest(request: ChatCompletionRequest): string[] {
+    const problems: string[] = [];
+
+    for (const message of request.messages) {
+      if (message.role === 'tool') {
+        problems.push("role 'tool' messages are not supported by the Anthropic Messages adapter");
+      }
+      if (Array.isArray(message.content)) {
+        const hasImage = message.content.some(part => part?.type === 'image_url');
+        if (hasImage) {
+          problems.push('image inputs are not supported by the Anthropic Messages adapter');
+        }
+      }
+    }
+
+    if (Array.isArray(request.tools) && request.tools.length > 0) {
+      problems.push('tool definitions are not supported by the Anthropic Messages adapter');
+    }
+
+    return problems;
   }
 
   private mapStopReason(reason: string): string {
