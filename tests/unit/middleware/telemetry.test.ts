@@ -13,9 +13,13 @@ const mockTelemetryService = {
   createTrace: vi.fn().mockResolvedValue(undefined)
 };
 
-vi.mock('../../../src/services/telemetry', () => ({
-  createTelemetryService: vi.fn(() => mockTelemetryService)
-}));
+vi.mock('../../../src/services/telemetry', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/services/telemetry')>();
+  return {
+    ...actual,
+    createTelemetryService: vi.fn(() => mockTelemetryService)
+  };
+});
 
 describe('Telemetry Middleware', () => {
   let app: Hono<{ Bindings: Env }>;

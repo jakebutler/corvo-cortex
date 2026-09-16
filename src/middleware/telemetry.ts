@@ -1,6 +1,6 @@
 import { MiddlewareHandler } from 'hono';
 import type { Env, Variables, LLMProvider } from '../types';
-import { createTelemetryService } from '../services/telemetry';
+import { createTelemetryService, getRedactionPatterns, redactPayload, truncatePayload, resolveTelemetryMode } from '../services/telemetry';
 import { estimateCostFromUsage } from '../services/pricing';
 
 /**
@@ -52,6 +52,12 @@ export const telemetryMiddleware: MiddlewareHandler<{ Bindings: Env; Variables: 
       await telemetry.completion;
 
       const client = c.get('client');
+      const telemetryMode = resolveTelemetryMode(client?.telemetry);
+
+      if (telemetryMode === 'off') {
+        return;
+      }
+
       const telemetryService = createTelemetryService(c.env);
 
       let output = c.get('responseData') as unknown;
@@ -60,16 +66,31 @@ export const telemetryMiddleware: MiddlewareHandler<{ Bindings: Env; Variables: 
       }
 
       const usage = getUsageFromContext(c) ?? getUsageFromOutput(output);
+      const usageFromContext = getUsageFromContext(c);
+      const usageForCost = usageFromContext ?? usage;
+      const costFromContext = c.get('telemetryCost') as number | undefined;
       let costUsd: number | undefined;
 
-      if (usage && isKnownProvider(telemetry.provider)) {
-        costUsd = await estimateCostFromUsage({
-          env: c.env,
-          provider: telemetry.provider,
-          model: telemetry.model,
-          promptTokens: usage.prompt_tokens || 0,
-          completionTokens: usage.completion_tokens || 0
-        });
+      if (usageForCost && isKnownProvider(telemetry.provider)) {
+        costUsd = costFromContext
+          ?? await estimateCostFromUsage({
+            env: c.env,
+            provider: telemetry.provider,
+            model: telemetry.model,
+            promptTokens: usageForCost.prompt_tokens || 0,
+            completionTokens: usageForCost.completion_tokens || 0
+          });
+      }
+
+      let traceInput: unknown = telemetry.input;
+      let traceOutput: unknown = output;
+      if (telemetryMode === 'metadata') {
+        traceInput = undefined;
+        traceOutput = undefined;
+      } else {
+        const patterns = await getRedactionPatterns(c.env);
+        traceInput = truncatePayload(redactPayload(traceInput, patterns));
+        traceOutput = truncatePayload(redactPayload(traceOutput, patterns));
       }
 
       await telemetryService.createTrace({
@@ -77,8 +98,8 @@ export const telemetryMiddleware: MiddlewareHandler<{ Bindings: Env; Variables: 
         appId: client?.appId || 'unknown-app',
         provider: telemetry.provider,
         model: telemetry.model,
-        input: telemetry.input,
-        output: output,
+        input: traceInput,
+        output: traceOutput,
         error: c.res.status >= 400 ? getErrorMessage(output) : undefined,
         statusCode: c.res.status,
         startTime: telemetry.startTime,
@@ -86,6 +107,7 @@ export const telemetryMiddleware: MiddlewareHandler<{ Bindings: Env; Variables: 
         costUsd,
         metadata: {
           environment: c.env.ENVIRONMENT,
+          telemetry_mode: telemetryMode,
           ...(telemetry.metadata || {})
         },
         usage: usage ? {
@@ -150,6 +172,16 @@ export function storeTelemetryUsage(
   usage: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number }
 ): void {
   c.set('telemetryUsage', usage);
+}
+
+/**
+ * Reuse the credit path's cost computation for telemetry (single computation per request).
+ */
+export function storeTelemetryCost(
+  c: { set: (key: string, value: unknown) => void },
+  costUsd: number
+): void {
+  c.set('telemetryCost', costUsd);
 }
 
 /**

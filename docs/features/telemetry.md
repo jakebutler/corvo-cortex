@@ -34,6 +34,34 @@ If `LANGFUSE_BASE_URL` is missing, Corvo Cortex defaults to `https://us.cloud.la
 
 ---
 
+## Data Minimization
+
+### Per-client telemetry mode
+
+Each client record in `CORTEX_CLIENTS` may set `telemetry`:
+
+| Mode | Input/output payloads | Usage, cost, latency, provider, model | Trace at all |
+|---|---|---|---|
+| `"full"` (default) | Yes — redacted + truncated | Yes | Yes |
+| `"metadata"` | No (`input`/`output` omitted) | Yes | Yes |
+| `"off"` | — | — | No trace is created |
+
+Omitting the field means `"full"` (backward compatible with existing records). New clients should prefer `"metadata"`.
+
+### Redaction
+
+Before ingestion, `full`-mode payloads pass through a redaction filter with built-in patterns for common secret shapes (`sk-…` API keys, `Bearer …` tokens, `x-api-key` values). Additional patterns can be configured (regex source strings, ≤ 256 chars) via `CORTEX_CONFIG` key `config:telemetry-redactions`; invalid entries are skipped. Matches are replaced with `[REDACTED]`.
+
+### Truncation
+
+Input and output payloads are capped at **50,000 characters** per side. Oversized payloads are replaced with `{ truncated: true, originalChars, preview }`.
+
+### Data retention statement
+
+Corvo Cortex does not store request data at rest beyond the request lifetime; telemetry traces are transferred to and retained by **Langfuse US cloud** under the workspace's Langfuse retention settings (default retention: 30 days in Langfuse cloud free tier — operators should configure retention explicitly in Langfuse). Clients requiring stricter guarantees should set `telemetry: "metadata"` or `"off"`.
+
+---
+
 ## Transport
 
 Corvo Cortex uses direct Langfuse ingestion API calls:

@@ -10,6 +10,7 @@ import {
   updateTelemetryMetadata,
   storeResponseData,
   storeTelemetryUsage,
+  storeTelemetryCost,
   setTelemetryCompletion
 } from '../middleware/telemetry';
 import { getCreditBalance, reserveCredits, settleCredits, releaseCreditsReservation } from '../services/credits';
@@ -261,6 +262,7 @@ responsesApp.post('/', async (c) => {
               promptTokens: usage.prompt_tokens || 0,
               completionTokens: usage.completion_tokens || 0
             });
+            storeTelemetryCost(c, cost);
             await settleReservation(cost);
           },
           onDone: async () => {
@@ -315,6 +317,7 @@ responsesApp.post('/', async (c) => {
         promptTokens: responseData.usage.prompt_tokens || 0,
         completionTokens: responseData.usage.completion_tokens || 0
       });
+      storeTelemetryCost(c, cost);
       await settleReservation(cost);
     } else {
       await settleReservation(0);

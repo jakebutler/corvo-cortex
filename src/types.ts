@@ -3,12 +3,15 @@
  */
 
 // Client configuration from KV
+export type TelemetryMode = 'full' | 'metadata' | 'off';
+
 export interface ClientConfig {
   appId: string;
   name: string;
   defaultModel: string;
   allowZai: boolean;
   allowedModels?: string[];
+  telemetry?: TelemetryMode;
   fallbackStrategy: 'openrouter' | 'fail-fast';
   rateLimit: {
     requestsPerMinute: number;
@@ -131,5 +134,6 @@ export interface Variables {
     completion_tokens?: number;
     total_tokens?: number;
   };
+  telemetryCost?: number;
   responseData?: unknown;
 }
