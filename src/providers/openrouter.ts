@@ -5,6 +5,8 @@ import type { ProviderAdapter, ChatCompletionRequest, ChatCompletionResponse } f
  * OpenRouter is an OpenAI-compatible aggregator, so transformation is minimal
  */
 export class OpenRouterAdapter implements ProviderAdapter {
+  readonly wireFormat = 'openai' as const;
+
   /**
    * OpenRouter uses OpenAI-compatible format
    */
@@ -24,15 +26,10 @@ export class OpenRouterAdapter implements ProviderAdapter {
   }
 
   /**
-   * OpenRouter SSE chunks are OpenAI-compatible
+   * OpenRouter accepts all gateway-supported request features
    */
-  transformStreamChunk(chunk: string, _model: string): string {
-    // OpenRouter SSE format is compatible with OpenAI
-    // Just return as-is
-    if (chunk.startsWith('data: ')) {
-      return chunk + '\n';
-    }
-    return `data: ${chunk}\n\n`;
+  validateRequest(_request: ChatCompletionRequest): string[] {
+    return [];
   }
 }
 

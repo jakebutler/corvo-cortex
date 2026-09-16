@@ -635,7 +635,39 @@ describe('Chat Route - /v1/chat/completions', () => {
             expect(logged).toContain('ECONNREFUSED');
             consoleErrorSpy.mockRestore();
         });
+
+        it('rejects image inputs routed to an adapter that cannot serve them', async () => {
+            const anthropicEnv = createMockEnv({ CREDITS_ANTHROPIC: 'true' });
+            globalThis.fetch = vi.fn().mockImplementation(async () => new Response('Not found', { status: 404 }));
+
+            const request = new Request('http://localhost/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${TEST_API_KEY}`
+                },
+                body: JSON.stringify({
+                    model: 'claude-sonnet-4-6',
+                    messages: [{
+                        role: 'user',
+                        content: [
+                            { type: 'text', text: 'What is in this image?' },
+                            { type: 'image_url', image_url: { url: 'data:image/png;base64,AAAA' } }
+                        ]
+                    }]
+                })
+            });
+
+            const response = await chatApp.fetch(request, anthropicEnv, mockExecutionCtx);
+
+            expect(response.status).toBe(400);
+            const json = await response.json() as { error: string; details: string[] };
+            expect(json.error).toBe('Invalid request');
+            expect(json.details.some((problem) => problem.includes('image inputs'))).toBe(true);
+            expect(globalThis.fetch).not.toHaveBeenCalledWith(expect.stringContaining('anthropic.com'), expect.anything());
+        });
     });
+
     describe('Header-Driven Routing', () => {
         it('routes by x-kinisi headers and emits x-corvo-cortex metadata headers', async () => {
             const request = new Request('http://localhost/', {

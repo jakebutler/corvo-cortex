@@ -1,26 +1,37 @@
-import type { ProviderAdapter, ChatCompletionRequest, ChatCompletionResponse, ChatMessage } from './base';
+import type { ProviderAdapter, ChatCompletionRequest, ChatCompletionResponse } from './base';
 
 /**
  * Z.ai (Zhipu AI / GLM) API adapter
  * Converts between OpenAI ChatCompletion format and GLM API format
  */
 export class ZaiAdapter implements ProviderAdapter {
+  readonly wireFormat = 'openai' as const;
+
   /**
    * Convert OpenAI request to GLM API format
    * GLM API is largely compatible with OpenAI format
    */
   transformRequest(request: ChatCompletionRequest): Record<string, unknown> {
-    return {
+    const payload: Record<string, unknown> = {
       model: request.model,
       messages: request.messages.map(m => ({
         role: m.role,
         content: messageContentToText(m.content)
       })),
-      temperature: request.temperature ?? 0.7,
-      top_p: request.top_p,
-      max_tokens: request.max_tokens || 4096,
       stream: request.stream || false
     };
+
+    if (request.temperature !== undefined) {
+      payload.temperature = request.temperature;
+    }
+    if (request.top_p !== undefined) {
+      payload.top_p = request.top_p;
+    }
+    if (request.max_tokens !== undefined) {
+      payload.max_tokens = request.max_tokens;
+    }
+
+    return payload;
   }
 
   /**
@@ -66,35 +77,29 @@ export class ZaiAdapter implements ProviderAdapter {
   }
 
   /**
-   * Transform GLM streaming chunk to OpenAI SSE format
-   * GLM SSE format is compatible with OpenAI
+   * Surface unsupported features instead of silently dropping them
    */
-  transformStreamChunk(chunk: string, model: string): string {
-    try {
-      const event = JSON.parse(chunk);
+  validateRequest(request: ChatCompletionRequest): string[] {
+    const problems: string[] = [];
 
-      // GLM streaming format is similar to OpenAI
-      const openaiChunk = {
-        id: event.id || `chatcmpl-${Date.now()}`,
-        object: 'chat.completion.chunk',
-        created: event.created || Math.floor(Date.now() / 1000),
-        model,
-        choices: event.choices?.map((c: unknown) => c) || [{
-          index: 0,
-          delta: event.delta || {},
-          finish_reason: event.finish_reason || null
-        }]
-      };
-
-      return `data: ${JSON.stringify(openaiChunk)}\n\n`;
-    } catch {
-      // Return raw chunk if parsing fails
-      return chunk;
+    for (const message of request.messages) {
+      if (Array.isArray(message.content)) {
+        const hasImage = message.content.some(part => part?.type === 'image_url');
+        if (hasImage) {
+          problems.push('image inputs are not supported by the Z.ai adapter');
+        }
+      }
     }
+
+    if (Array.isArray(request.tools) && request.tools.length > 0) {
+      problems.push('tool definitions are not supported by the Z.ai adapter');
+    }
+
+    return problems;
   }
 }
 
-function messageContentToText(content: ChatMessage['content']): string {
+function messageContentToText(content: import('./base').ChatMessage['content']): string {
   if (typeof content === 'string') return content;
   if (Array.isArray(content)) {
     return content

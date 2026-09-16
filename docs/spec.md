@@ -323,6 +323,10 @@ When an upstream provider call fails, the gateway never returns the provider's r
 
 Raw upstream error bodies are retained server-side only: structured `console.error` logs and Langfuse telemetry metadata (`upstream_error`, truncated to 2,000 chars).
 
+### Streaming
+
+All providers stream to clients as OpenAI-compatible SSE (see [Streaming](./features/streaming.md)). Anthropic-format upstreams (Anthropic Direct, MiniMax) are normalized to OpenAI chunks by the gateway, including usage tapping for credit metering. Requests carrying features a provider cannot serve (e.g. image inputs or tools to Anthropic-family providers) are rejected with `400` and an explicit `details` list — features are never silently dropped.
+
 ---
 
 ## Telemetry Runtime Note

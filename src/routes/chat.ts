@@ -445,7 +445,12 @@ async function handleHeaderDrivenRequest(
     let streamOutput = '';
 
     try {
+      const winnerAdapter = getAdapterForProvider(winnerProvider);
       const streamingResponse = await createStreamingResponseWithUsage(upstreamResponse, {
+        streamModel: executionResult.winner.model,
+        transformStreamData: winnerAdapter.wireFormat === 'anthropic'
+          ? winnerAdapter.transformStreamData?.bind(winnerAdapter)
+          : undefined,
         onChunk: (chunk) => {
           streamOutput += chunk;
         },
@@ -663,6 +668,26 @@ async function handleLegacyRequest(
   const adapter = getAdapterForProvider(route.provider);
   let finalBalance = await getCreditBalance(c.env, route.provider);
   let providerRequest = adapter.transformRequest({ ...body, model: wireModel });
+
+  const requestProblems = adapter.validateRequest({ ...body, model: wireModel });
+  if (requestProblems.length > 0) {
+    const errorPayload = {
+      error: 'Invalid request',
+      provider: route.provider,
+      details: requestProblems
+    };
+    storeResponseData(c, errorPayload);
+    setCorvoHeadersOnContext(c, {
+      provider: route.provider,
+      model: wireModel,
+      routeId,
+      fallbackUsed: Boolean(route.fallback),
+      hedgeUsed: false,
+      latencyMs: Date.now() - requestStart
+    });
+    return c.json(errorPayload, 400);
+  }
+
   const concurrency = await acquireProviderConcurrencyLease(c.env, route.provider, wireModel);
 
   if (!concurrency.allowed) {
@@ -838,6 +863,10 @@ async function handleLegacyRequest(
 
       try {
         const streamingResponse = await createStreamingResponseWithUsage(response, {
+          streamModel: model,
+          transformStreamData: adapter.wireFormat === 'anthropic'
+            ? adapter.transformStreamData?.bind(adapter)
+            : undefined,
           onChunk: (chunk) => {
             streamOutput += chunk;
           },
