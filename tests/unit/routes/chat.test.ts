@@ -575,4 +575,209 @@ describe('Chat Route - /v1/chat/completions', () => {
             expect(response.headers.get('x-corvo-cortex-cache-hit')).toBe('unknown');
         });
     });
+
+    describe('Spend Guardrails', () => {
+        it('returns 413 when the request body exceeds the configured size limit', async () => {
+            const smallEnv = createMockEnv({ MAX_BODY_BYTES: '100' });
+
+            const request = new Request('http://localhost/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${TEST_API_KEY}`
+                },
+                body: JSON.stringify({
+                    model: 'gpt-4o',
+                    messages: [{ role: 'user', content: 'x'.repeat(500) }]
+                })
+            });
+
+            const response = await chatApp.fetch(request, smallEnv, mockExecutionCtx);
+
+            expect(response.status).toBe(413);
+            const json = await response.json() as { error: string };
+            expect(json.error).toContain('too large');
+        });
+
+        it('returns 400 when max_tokens exceeds the configured ceiling', async () => {
+            const request = new Request('http://localhost/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${TEST_API_KEY}`
+                },
+                body: JSON.stringify({
+                    model: 'gpt-4o',
+                    max_tokens: 40_000,
+                    messages: [{ role: 'user', content: 'Hello' }]
+                })
+            });
+
+            const response = await chatApp.fetch(request, mockEnv, mockExecutionCtx);
+
+            expect(response.status).toBe(400);
+            const json = await response.json() as { details: Array<{ message: string }> };
+            expect(JSON.stringify(json.details)).toContain('ceiling');
+        });
+
+        it('honours a configured MAX_TOKENS_CEILING override', async () => {
+            const lowCeilingEnv = createMockEnv({ MAX_TOKENS_CEILING: '100' });
+
+            const request = new Request('http://localhost/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${TEST_API_KEY}`
+                },
+                body: JSON.stringify({
+                    model: 'gpt-4o',
+                    max_tokens: 101,
+                    messages: [{ role: 'user', content: 'Hello' }]
+                })
+            });
+
+            const response = await chatApp.fetch(request, lowCeilingEnv, mockExecutionCtx);
+            expect(response.status).toBe(400);
+        });
+
+        it('returns 400 when the request has more than 128 messages', async () => {
+            const messages = Array.from({ length: 129 }, (_, i) => ({ role: 'user', content: `msg ${i}` }));
+
+            const request = new Request('http://localhost/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${TEST_API_KEY}`
+                },
+                body: JSON.stringify({ model: 'gpt-4o', messages })
+            });
+
+            const response = await chatApp.fetch(request, mockEnv, mockExecutionCtx);
+
+            expect(response.status).toBe(400);
+            const json = await response.json() as { details: Array<{ message: string }> };
+            expect(JSON.stringify(json.details)).toContain('Too many messages');
+        });
+
+        it('returns 400 when a message content string exceeds the per-message cap', async () => {
+            const request = new Request('http://localhost/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${TEST_API_KEY}`
+                },
+                body: JSON.stringify({
+                    model: 'gpt-4o',
+                    messages: [{ role: 'user', content: 'x'.repeat(262_145) }]
+                })
+            });
+
+            const response = await chatApp.fetch(request, mockEnv, mockExecutionCtx);
+            expect(response.status).toBe(400);
+        });
+
+        it('returns 400 when an image data URL exceeds the length cap', async () => {
+            const request = new Request('http://localhost/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${TEST_API_KEY}`
+                },
+                body: JSON.stringify({
+                    model: 'gpt-4o',
+                    messages: [{
+                        role: 'user',
+                        content: [{
+                            type: 'image_url',
+                            image_url: { url: `data:image/png;base64,${'A'.repeat(1_572_864)}` }
+                        }]
+                    }]
+                })
+            });
+
+            const response = await chatApp.fetch(request, mockEnv, mockExecutionCtx);
+            expect(response.status).toBe(400);
+        });
+
+        it('returns 403 in legacy mode when the model is outside the client allowlist', async () => {
+            const restrictedEnv = createMockEnv({
+                CORTEX_CLIENTS: createMockKV({
+                    [TEST_API_KEY]: createMockClientConfig({ allowedModels: ['glm-4-plus', 'gpt-4o*'] })
+                })
+            });
+
+            const request = new Request('http://localhost/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${TEST_API_KEY}`
+                },
+                body: JSON.stringify({
+                    model: 'claude-3-5-sonnet',
+                    messages: [{ role: 'user', content: 'Hello' }]
+                })
+            });
+
+            const response = await chatApp.fetch(request, restrictedEnv, mockExecutionCtx);
+
+            expect(response.status).toBe(403);
+            const json = await response.json() as { error: string; model: string };
+            expect(json.error).toBe('Forbidden');
+            expect(json.model).toBe('claude-sonnet-4-6');
+            expect(globalThis.fetch).not.toHaveBeenCalledWith(expect.stringContaining('openai.com'), expect.anything());
+        });
+
+        it('returns 403 in header mode when the requested model is outside the client allowlist', async () => {
+            const restrictedEnv = createMockEnv({
+                CORTEX_CLIENTS: createMockKV({
+                    [TEST_API_KEY]: createMockClientConfig({ allowedModels: ['gpt-4o'] })
+                })
+            });
+
+            const request = new Request('http://localhost/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${TEST_API_KEY}`,
+                    'x-kinisi-llm-stage': 'week_n',
+                    'x-kinisi-routing-strategy': 'speed',
+                    'x-kinisi-model': 'gpt-5-mini'
+                },
+                body: JSON.stringify({
+                    messages: [{ role: 'user', content: 'Generate week plan JSON' }]
+                })
+            });
+
+            const response = await chatApp.fetch(request, restrictedEnv, mockExecutionCtx);
+
+            expect(response.status).toBe(403);
+            const json = await response.json() as { error: string; model: string };
+            expect(json.error).toBe('Forbidden');
+            expect(json.model).toBe('gpt-5-mini');
+            expect(globalThis.fetch).not.toHaveBeenCalledWith(expect.stringContaining('openrouter.ai'), expect.anything());
+        });
+
+        it('allows prefix glob matches in the client allowlist', async () => {
+            const restrictedEnv = createMockEnv({
+                CORTEX_CLIENTS: createMockKV({
+                    [TEST_API_KEY]: createMockClientConfig({ allowedModels: ['gpt-*'] })
+                })
+            });
+
+            const request = new Request('http://localhost/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${TEST_API_KEY}`
+                },
+                body: JSON.stringify({
+                    model: 'gpt-4o',
+                    messages: [{ role: 'user', content: 'Hello' }]
+                })
+            });
+
+            const response = await chatApp.fetch(request, restrictedEnv, mockExecutionCtx);
+            expect(response.status).toBe(200);
+        });
+    });
 });

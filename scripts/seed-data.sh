@@ -22,6 +22,7 @@ npx wrangler kv key put --namespace-id="$CLIENTS_NAMESPACE_ID" "sk-corvo-kinisi-
   "name": "Kinisi Mobile",
   "defaultModel": "claude-3-5-sonnet",
   "allowZai": true,
+  "allowedModels": ["*"],
   "fallbackStrategy": "openrouter",
   "rateLimit": {
     "requestsPerMinute": 100,

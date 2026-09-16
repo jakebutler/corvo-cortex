@@ -1,6 +1,10 @@
 import { Hono } from 'hono';
-import type { Env, LLMProvider } from '../types';
+import { z } from 'zod';
+import type { Env, LLMProvider, Variables } from '../types';
 import { authMiddleware } from '../middleware/auth';
+import { requestBodyLimitMiddleware } from '../middleware/body-limit';
+import { getMaxTokensCeiling } from '../utils/limits';
+import { isModelAllowedForClient, modelAuthorizationErrorPayload } from '../services/model-authorization';
 import {
   telemetryMiddleware,
   updateTelemetryMetadata,
@@ -13,9 +17,10 @@ import { estimateCostFromUsage } from '../services/pricing';
 import { createStreamingResponseWithUsage } from '../utils/streaming';
 import { fetchWithRetry } from '../utils/retry';
 
-const responsesApp = new Hono<{ Bindings: Env }>();
+const responsesApp = new Hono<{ Bindings: Env; Variables: Variables }>();
 
 responsesApp.use('*', authMiddleware);
+responsesApp.use('*', requestBodyLimitMiddleware());
 responsesApp.use('*', telemetryMiddleware);
 
 async function checkCircuitBreaker(
@@ -67,15 +72,40 @@ async function recordCircuitBreakerFailure(env: Env, provider: string): Promise<
 }
 
 responsesApp.post('/', async (c) => {
-  const rawBody = await c.req.json();
+  const rawBody = await c.req.json().catch(() => null);
+  if (rawBody === null || typeof rawBody !== 'object') {
+    const errorPayload = { error: 'Invalid request', details: 'Request body must be a JSON object' };
+    storeResponseData(c, errorPayload);
+    return c.json(errorPayload, 400);
+  }
   c.set('requestBody', rawBody);
 
-  const requestedModel = typeof rawBody?.model === 'string' ? rawBody.model : 'unknown';
+  const bodyRecord = rawBody as Record<string, unknown>;
+
+  const requestedModel = typeof bodyRecord?.model === 'string' ? bodyRecord.model : 'unknown';
   updateTelemetryMetadata(c, 'fireworks', requestedModel, rawBody);
 
-  const model = rawBody?.model as string | undefined;
+  const model = bodyRecord?.model as string | undefined;
   if (!model || typeof model !== 'string') {
     const errorPayload = { error: 'Invalid request', details: 'Missing model' };
+    storeResponseData(c, errorPayload);
+    return c.json(errorPayload, 400);
+  }
+
+  const client = c.get('client');
+  if (!isModelAllowedForClient(client, model)) {
+    const errorPayload = modelAuthorizationErrorPayload(model);
+    storeResponseData(c, errorPayload);
+    return c.json(errorPayload, 403);
+  }
+
+  const maxTokensCheck = z.number().int().positive().max(getMaxTokensCeiling(c.env))
+    .safeParse(bodyRecord?.max_tokens);
+  if (bodyRecord?.max_tokens !== undefined && !maxTokensCheck.success) {
+    const errorPayload = {
+      error: 'Invalid request',
+      details: `max_tokens must be a positive integer not exceeding ${getMaxTokensCeiling(c.env)}`
+    };
     storeResponseData(c, errorPayload);
     return c.json(errorPayload, 400);
   }
