@@ -22,6 +22,7 @@ JSON_CONFIG='{
   "name": "Kinisi",
   "defaultModel": "claude-3-5-sonnet",
   "allowZai": true,
+  "allowedModels": ["*"],
   "fallbackStrategy": "openrouter",
   "rateLimit": {
     "requestsPerMinute": 1000,

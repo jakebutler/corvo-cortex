@@ -65,6 +65,7 @@ wrangler kv key put --namespace-id=<ID> "sk-corvo-myapp-xxx" '{
   "name": "My Application",
   "defaultModel": "gpt-4o",
   "allowZai": true,
+  "allowedModels": ["gpt-4o", "claude-3-5-sonnet", "glm*"],
   "fallbackStrategy": "openrouter",
   "rateLimit": {
     "requestsPerMinute": 100,
@@ -72,6 +73,8 @@ wrangler kv key put --namespace-id=<ID> "sk-corvo-myapp-xxx" '{
   }
 }' --remote
 ```
+
+`allowedModels` restricts which models a client may invoke (`403` otherwise). Entries are exact model IDs, prefix globs with a trailing `*` (e.g. `glm*`), or `*` for allow-all. Omitting the field allows all models (backward compatibility with existing records); an empty array denies all. See [Spend Guardrails](./spend-guardrails.md).
 
 ---
 

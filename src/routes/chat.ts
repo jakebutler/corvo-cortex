@@ -21,10 +21,13 @@ import { getAdapterForProvider } from '../utils/transform';
 import { resolveModelAlias } from '../utils/model-aliases';
 import { createStreamingResponseWithUsage } from '../utils/streaming';
 import { fetchWithRetry } from '../utils/retry';
-import { chatCompletionRequestSchema } from '../schemas/chat';
+import { createChatCompletionRequestSchema, ChatCompletionRequest } from '../schemas/chat';
 import { chatCompletionResponseSchema } from '../schemas/response';
 import { parseKinisiRoutingHints } from '../services/routing-hints';
 import { getRoutingPolicy } from '../services/routing-policy';
+import { isModelAllowedForClient, modelAuthorizationErrorPayload } from '../services/model-authorization';
+import { getMaxTokensCeiling } from '../utils/limits';
+import { requestBodyLimitMiddleware } from '../middleware/body-limit';
 import { buildRoutePlan } from '../services/route-planner';
 import {
   createFailureResult,
@@ -48,6 +51,7 @@ type ChatContext = Context<{ Bindings: Env; Variables: Variables }>;
 
 // Apply middleware in order
 chatApp.use('*', authMiddleware);
+chatApp.use('*', requestBodyLimitMiddleware());
 chatApp.use('*', telemetryMiddleware);
 
 interface HeaderMetadata {
@@ -145,7 +149,7 @@ chatApp.post('/', async (c) => {
   const rawModel = getRawModel(rawBody, client.defaultModel);
   updateTelemetryMetadata(c, 'unresolved', rawModel || 'unknown', rawBody);
 
-  const validationResult = chatCompletionRequestSchema.safeParse(rawBody);
+  const validationResult = createChatCompletionRequestSchema(getMaxTokensCeiling(c.env)).safeParse(rawBody);
   if (!validationResult.success) {
     const errorPayload = {
       error: 'Invalid request',
@@ -171,7 +175,7 @@ chatApp.post('/', async (c) => {
 
 async function handleHeaderDrivenRequest(
   c: ChatContext,
-  body: ReturnType<typeof chatCompletionRequestSchema.parse>,
+  body: ChatCompletionRequest,
   rawBody: unknown,
   client: ClientConfig,
   hints: ReturnType<typeof parseKinisiRoutingHints>,
@@ -199,6 +203,17 @@ async function handleHeaderDrivenRequest(
   }
 
   const model = resolveModelAlias(hints.requestedModel || body.model || client.defaultModel || 'gpt-4o');
+
+  if (!isModelAllowedForClient(client, model)) {
+    const errorPayload = modelAuthorizationErrorPayload(model);
+    storeResponseData(c, errorPayload);
+    setCorvoHeadersOnContext(c, {
+      model,
+      latencyMs: Date.now() - requestStart
+    });
+    return c.json(errorPayload, 403);
+  }
+
   const routePlan = buildRoutePlan(policy, hints, model);
 
   updateTelemetryMetadata(c, 'unresolved', routePlan.model || model, rawBody, {
@@ -443,7 +458,7 @@ async function handleHeaderDrivenRequest(
 
 async function handleLegacyRequest(
   c: ChatContext,
-  body: ReturnType<typeof chatCompletionRequestSchema.parse>,
+  body: ChatCompletionRequest,
   rawBody: unknown,
   client: ClientConfig,
   requestStart: number,
@@ -451,6 +466,19 @@ async function handleLegacyRequest(
 ): Promise<Response> {
   const model = resolveModelAlias(body.model || client.defaultModel || 'gpt-4o');
   const routeId = createLegacyRouteId();
+
+  if (!isModelAllowedForClient(client, model)) {
+    const errorPayload = modelAuthorizationErrorPayload(model);
+    storeResponseData(c, errorPayload);
+    setCorvoHeadersOnContext(c, {
+      model,
+      routeId,
+      fallbackUsed: false,
+      hedgeUsed: false,
+      latencyMs: Date.now() - requestStart
+    });
+    return c.json(errorPayload, 403);
+  }
 
   let route: Awaited<ReturnType<typeof determineProvider>>;
   try {
