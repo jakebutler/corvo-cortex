@@ -27,6 +27,18 @@ export const routingPolicySchema = z.object({
   version: z.string().min(1),
   enabled: z.boolean(),
   modelProfiles: z.record(modelProfileKeySchema, z.string().min(1)),
+  /**
+   * Policy-level model allowlist: exact ids or trailing-* prefix globs.
+   * ['*'] allows everything; omitted allows everything; [] allows nothing.
+   * Applies to client-pinned models (x-kinisi-model / body model).
+   */
+  allowedModels: z.array(z.string().min(1)).optional(),
+  /**
+   * When false, a client-pinned model outside allowedModels is rejected (403).
+   * When true/undefined, a pinned model outside the allowlist silently falls
+   * back to the policy's model profile.
+   */
+  allowClientModelPinning: z.boolean().optional(),
   matrix: z.record(routingStageSchema, stageStrategyMapSchema),
   hedge: z.object({
     week_n_speed: z.boolean(),

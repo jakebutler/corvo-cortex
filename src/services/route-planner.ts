@@ -1,6 +1,7 @@
 import type { RoutePolicyEntry, RoutingPolicy } from '../schemas/routing-policy';
 import { resolveRequestedModel } from './routing-hints';
 import { resolvePolicyRouteChain } from './routing-policy';
+import { matchesModelAllowlist } from './model-authorization';
 import type {
   KinisiRoutingHints,
   RequestPriority,
@@ -25,6 +26,11 @@ export interface RoutePlan {
   model?: string;
   candidates: PlannedRouteCandidate[];
   constraintsIgnored: boolean;
+  /**
+   * True when the client pinned a model that the policy allowlist rejects and
+   * the policy is configured to hard-reject pinning (allowClientModelPinning: false).
+   */
+  pinRejected?: boolean;
   hedge: {
     enabled: boolean;
     delayMs: number;
@@ -45,7 +51,18 @@ export function buildRoutePlan(
   const routeChain = resolvePolicyRouteChain(policy, hints.stage, hints.strategy);
   const requestedModel = resolveRequestedModel(hints, bodyModel);
 
-  const baseCandidates = routeChain.map((entry) => buildCandidate(policy, entry, requestedModel));
+  const pinInAllowlist = requestedModel !== undefined
+    && matchesModelAllowlist(policy.allowedModels, requestedModel);
+  const pinHardRejected = requestedModel !== undefined
+    && !pinInAllowlist
+    && policy.allowClientModelPinning === false;
+
+  // A pinned model the policy rejects falls back to the policy's own profiles.
+  const effectiveModel = requestedModel !== undefined && pinInAllowlist
+    ? requestedModel
+    : undefined;
+
+  const baseCandidates = routeChain.map((entry) => buildCandidate(policy, entry, effectiveModel));
   const constrainedCandidates = applyProviderConstraints(baseCandidates, hints);
 
   const hasConstraints = Boolean((hints.providerAllow && hints.providerAllow.length) || (hints.providerBlock && hints.providerBlock.length));
@@ -70,9 +87,10 @@ export function buildRoutePlan(
     strategy: hints.strategy,
     requestPriority: hints.requestPriority,
     requestRole: hints.requestRole,
-    model: requestedModel,
+    model: effectiveModel,
     candidates: selectedCandidates,
     constraintsIgnored,
+    pinRejected: pinHardRejected || undefined,
     hedge: {
       enabled: isHedgeEnabled(policy, hints),
       delayMs: policy.hedge.delayMs

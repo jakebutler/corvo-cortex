@@ -91,4 +91,72 @@ describe('buildRoutePlan', () => {
     });
     expect(disabledPlan.hedge.enabled).toBe(false);
   });
+
+  describe('policy model allowlist (#15)', () => {
+    const allowlistPolicy = {
+      ...DEFAULT_ROUTING_POLICY,
+      allowedModels: ['gpt-5-mini', 'glm-*']
+    };
+
+    it('honors a pinned model inside the policy allowlist', () => {
+      const plan = buildRoutePlan(allowlistPolicy, {
+        ...baseHints,
+        requestedModel: 'glm-5.3-flash'
+      });
+
+      expect(plan.model).toBe('glm-5.3-flash');
+      expect(plan.candidates[0].model).toBe('glm-5.3-flash');
+      expect(plan.pinRejected).toBeUndefined();
+    });
+
+    it('falls back to the policy profile for a pinned model outside the allowlist (default)', () => {
+      const plan = buildRoutePlan(allowlistPolicy, {
+        ...baseHints,
+        requestedModel: 'openai/gpt-5-pro'
+      });
+
+      expect(plan.model).toBeUndefined();
+      expect(plan.candidates[0].model).toBe(allowlistPolicy.modelProfiles.fast_json_model);
+      expect(plan.pinRejected).toBeUndefined();
+    });
+
+    it('marks the pin as rejected when allowClientModelPinning is false', () => {
+      const strictPolicy = {
+        ...allowlistPolicy,
+        allowClientModelPinning: false
+      };
+
+      const plan = buildRoutePlan(strictPolicy, {
+        ...baseHints,
+        requestedModel: 'openai/gpt-5-pro'
+      });
+
+      expect(plan.pinRejected).toBe(true);
+    });
+
+    it('keeps honoring allowed pins when allowClientModelPinning is false', () => {
+      const strictPolicy = {
+        ...allowlistPolicy,
+        allowClientModelPinning: false
+      };
+
+      const plan = buildRoutePlan(strictPolicy, {
+        ...baseHints,
+        requestedModel: 'gpt-5-mini'
+      });
+
+      expect(plan.model).toBe('gpt-5-mini');
+      expect(plan.pinRejected).toBeUndefined();
+    });
+
+    it('allows all pins when no policy allowlist is configured (backward compatible)', () => {
+      const plan = buildRoutePlan(DEFAULT_ROUTING_POLICY, {
+        ...baseHints,
+        requestedModel: 'whatever-expensive-model'
+      });
+
+      expect(plan.model).toBe('whatever-expensive-model');
+      expect(plan.pinRejected).toBeUndefined();
+    });
+  });
 });

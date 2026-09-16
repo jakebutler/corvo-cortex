@@ -1,17 +1,17 @@
 import type { ClientConfig } from '../types';
 
 /**
- * Decide whether a client may invoke a model.
+ * Generic allowlist matching shared by the per-client (#6) and routing-policy (#15)
+ * model allowlists.
  *
- * Semantics of ClientConfig.allowedModels:
- * - undefined (legacy records): all models allowed (backward compatible)
+ * Semantics:
+ * - undefined: all models allowed (field absent)
  * - []: no models allowed
  * - ['*']: all models allowed
  * - entry ending with '*': prefix match (e.g. 'gpt-4o*')
  * - otherwise: exact match
  */
-export function isModelAllowedForClient(client: ClientConfig, model: string): boolean {
-  const allowedModels = client.allowedModels;
+export function matchesModelAllowlist(allowedModels: string[] | undefined, model: string): boolean {
   if (allowedModels === undefined) return true;
   if (allowedModels.length === 0) return false;
 
@@ -22,6 +22,13 @@ export function isModelAllowedForClient(client: ClientConfig, model: string): bo
   }
 
   return false;
+}
+
+/**
+ * Decide whether a client may invoke a model based on ClientConfig.allowedModels.
+ */
+export function isModelAllowedForClient(client: ClientConfig, model: string): boolean {
+  return matchesModelAllowlist(client.allowedModels, model);
 }
 
 export function modelAuthorizationErrorPayload(model: string): {
