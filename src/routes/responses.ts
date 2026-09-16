@@ -21,8 +21,11 @@ import { createStreamingResponseWithUsage } from '../utils/streaming';
 import { fetchWithRetry } from '../utils/retry';
 import { circuitBreakerInstanceId } from '../durable-objects/circuit-breaker';
 import { buildUpstreamErrorEnvelope, classifyUnknownUpstreamError, logUpstreamError, logUpstreamException } from '../utils/error-sanitizer';
+import { createAbortHandle } from '../utils/abort';
 
 const responsesApp = new Hono<{ Bindings: Env; Variables: Variables }>();
+
+const DEFAULT_PROVIDER_TIMEOUT_MS = 30_000;
 
 responsesApp.use('*', authMiddleware);
 responsesApp.use('*', requestBodyLimitMiddleware());
@@ -215,6 +218,8 @@ responsesApp.post('/', async (c) => {
     }
   };
 
+  const upstreamController = createAbortHandle();
+  const upstreamTimeout = setTimeout(() => upstreamController?.abort(), DEFAULT_PROVIDER_TIMEOUT_MS);
   try {
     const response = await fetchWithRetry(
       route.url,
@@ -227,12 +232,14 @@ responsesApp.post('/', async (c) => {
         maxRetries: 3,
         baseDelay: 100,
         maxDelay: 10000,
+        signal: upstreamController?.signal,
         onRetry: (attempt, error) => {
           // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
           console.warn(`Retry attempt ${attempt} for ${route.provider}:`, error.message);
         }
       }
     );
+    clearTimeout(upstreamTimeout);
 
     if (!response.ok) {
       await recordCircuitBreakerFailure(c.env, route.provider);

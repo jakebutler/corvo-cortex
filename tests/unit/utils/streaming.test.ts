@@ -151,4 +151,34 @@ describe('Streaming Utility', () => {
             expect(finalUsage.completion_tokens).toBe(7);
         });
     });
+
+    describe('client cancel', () => {
+        it('aborts the upstream reader and invokes onCancel when the client cancels', async () => {
+            let upstreamCancelled = false;
+
+            const upstream = new Response(new ReadableStream({
+                start(controller) {
+                    controller.enqueue(new TextEncoder().encode('data: {"usage":{"total_tokens":1}}\n\n'));
+                    // never closes on its own
+                },
+                cancel() {
+                    upstreamCancelled = true;
+                }
+            }));
+
+            let cancelCalled = false;
+            const response = await createStreamingResponseWithUsage(upstream, {
+                onCancel: async () => { cancelCalled = true; }
+            });
+
+            const reader = response.body!.getReader();
+            await reader.read();
+            await reader.cancel();
+
+            await new Promise((resolve) => setTimeout(resolve, 20));
+
+            expect(cancelCalled).toBe(true);
+            expect(upstreamCancelled).toBe(true);
+        });
+    });
 });

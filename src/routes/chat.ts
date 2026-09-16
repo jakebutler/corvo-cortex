@@ -25,6 +25,7 @@ import { getAdapterForProvider } from '../utils/transform';
 import { resolveModelAliasFromEnv } from '../utils/model-aliases';
 import { createStreamingResponseWithUsage } from '../utils/streaming';
 import { fetchWithRetry } from '../utils/retry';
+import { createAbortHandle } from '../utils/abort';
 import { createChatCompletionRequestSchema, ChatCompletionRequest } from '../schemas/chat';
 import { chatCompletionResponseSchema } from '../schemas/response';
 import { parseKinisiRoutingHints } from '../services/routing-hints';
@@ -52,6 +53,12 @@ import {
 import { circuitBreakerInstanceId } from '../durable-objects/circuit-breaker';
 
 const chatApp = new Hono<{ Bindings: Env; Variables: Variables }>();
+
+/**
+ * Server-side bound for legacy upstream calls (hedge/timeout semantics are
+ * separate); hung providers cannot hold requests beyond this window.
+ */
+const DEFAULT_PROVIDER_TIMEOUT_MS = 30_000;
 
 type ChatContext = Context<{ Bindings: Env; Variables: Variables }>;
 
@@ -812,7 +819,10 @@ async function handleLegacyRequest(
     }
   };
 
+  let upstreamTimeout: ReturnType<typeof setTimeout> | undefined;
+  const upstreamController = createAbortHandle();
   try {
+    upstreamTimeout = setTimeout(() => upstreamController?.abort(), DEFAULT_PROVIDER_TIMEOUT_MS);
     const response = await fetchWithRetry(
       route.url,
       {
@@ -824,12 +834,14 @@ async function handleLegacyRequest(
         maxRetries: 3,
         baseDelay: 100,
         maxDelay: 10000,
+        signal: upstreamController?.signal,
         onRetry: (attempt, error) => {
           // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring
           console.warn(`Retry attempt ${attempt} for ${route.provider}:`, error.message);
         }
       }
     );
+    clearTimeout(upstreamTimeout);
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -925,6 +937,11 @@ async function handleLegacyRequest(
             await releaseConcurrencyLease();
             resolveTelemetryCompletion?.();
           },
+          onCancel: async () => {
+            upstreamController?.abort();
+            await releaseConcurrencyLease();
+            resolveTelemetryCompletion?.();
+          },
           onError: async (error) => {
             if (!settled && reservationId) {
               await releaseCreditsReservation(c.env, route.provider, reservationId);
@@ -942,11 +959,8 @@ async function handleLegacyRequest(
           }
         });
 
-        const contentType = streamingResponse.headers.get('Content-Type') || '';
-        leaseReleasedByStreamLifecycle = contentType.includes('text/event-stream');
-        if (!leaseReleasedByStreamLifecycle) {
-          await releaseConcurrencyLease();
-        }
+        // The stream lifecycle now owns the lease: onDone/onError/onCancel release it.
+        leaseReleasedByStreamLifecycle = true;
 
         setCorvoHeadersOnResponse(streamingResponse, {
           provider: route.provider,
@@ -1030,6 +1044,9 @@ async function handleLegacyRequest(
     });
     return c.json(errorPayload, 500);
   } finally {
+    if (upstreamTimeout !== undefined) {
+      clearTimeout(upstreamTimeout);
+    }
     if (!leaseReleasedByStreamLifecycle) {
       await releaseConcurrencyLease();
     }

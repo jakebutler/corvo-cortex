@@ -59,6 +59,7 @@ interface StreamingUsageOptions {
   onUsage?: (usage: UsageInfo) => void | Promise<void>;
   onChunk?: (chunk: string) => void | Promise<void>;
   onDone?: () => void | Promise<void>;
+  onCancel?: () => void | Promise<void>;
   onError?: (error: unknown) => void | Promise<void>;
   /**
    * Model name stamped into normalized OpenAI chunk envelopes
@@ -98,6 +99,7 @@ async function createPassthroughStreamResponse(
   let buffer = '';
   let usageReported = false;
   let doneNotified = false;
+  let cancelled = false;
 
   const stream = new ReadableStream({
     async start(controller) {
@@ -111,9 +113,11 @@ async function createPassthroughStreamResponse(
         while (true) {
           const { done, value } = await reader.read();
           if (done) {
-            await notifyDone();
+            if (!cancelled) await notifyDone();
             break;
           }
+
+          if (cancelled) break;
 
           if (value) {
             const chunkText = decoder.decode(value, { stream: true });
@@ -143,13 +147,28 @@ async function createPassthroughStreamResponse(
             }
           }
 
-          controller.enqueue(value);
+          if (!cancelled) {
+            controller.enqueue(value);
+          }
         }
-        controller.close();
+        if (!cancelled) {
+          controller.close();
+        }
       } catch (error) {
-        await options.onError?.(error);
-        controller.error(error);
+        if (!cancelled) {
+          await options.onError?.(error);
+          controller.error(error);
+        }
       }
+    },
+    async cancel() {
+      cancelled = true;
+      try {
+        await reader.cancel();
+      } catch {
+        // upstream already gone
+      }
+      await options.onCancel?.();
     }
   });
 

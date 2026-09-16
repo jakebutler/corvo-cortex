@@ -109,4 +109,31 @@ describe('fetchWithRetry', () => {
         expect(onRetry).toHaveBeenCalledTimes(1);
         expect(onRetry).toHaveBeenCalledWith(1, expect.any(Error));
     });
+
+    it('bounds a hung provider when the signal aborts (no retries on abort)', async () => {
+        const controller = new AbortController();
+        vi.mocked(globalThis.fetch).mockImplementation(async (_url, init) => {
+            return new Promise((_resolve, reject) => {
+                const signal = (init as { signal?: AbortSignal }).signal;
+                if (signal?.aborted) {
+                    reject(new Error('aborted'));
+                    return;
+                }
+                signal?.addEventListener('abort', () => reject(new Error('aborted')));
+            });
+        });
+
+        const startedAt = Date.now();
+        setTimeout(() => controller.abort(), 50);
+
+        await expect(fetchWithRetry('http://test.com', {}, {
+            signal: controller.signal,
+            maxRetries: 3,
+            baseDelay: 1000
+        })).rejects.toThrow();
+
+        const elapsed = Date.now() - startedAt;
+        expect(elapsed).toBeLessThan(1000);
+        expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    });
 });

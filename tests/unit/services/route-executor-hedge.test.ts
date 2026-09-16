@@ -74,4 +74,41 @@ describe('executeRoutePlan hedging', () => {
     expect(result.ok).toBe(false);
     expect(seenHedgeRole).toBe(false);
   });
+
+  it('aborts the losing leg once a winner emerges', async () => {
+    const plan = createHedgePlan();
+    const legSignals: Record<string, { aborted: boolean }> = {};
+    let primaryStarted = false;
+    let primaryResolved = false;
+
+    const result = await executeRoutePlan({
+      plan,
+      attempt: async (candidate, context) => {
+        legSignals[candidate.provider] = context.signal as unknown as { aborted: boolean };
+
+        if (candidate.provider === 'fireworks') {
+          // Primary stays in flight past the hedge delay, then wins.
+          await new Promise(resolve => setTimeout(resolve, 80));
+          primaryResolved = true;
+          return createSuccessResult({
+            provider: candidate.provider,
+            model: candidate.model,
+            payload: { answer: 'primary-wins' }
+          });
+        }
+
+        // Hedge hangs until aborted.
+        while (!(context.signal as unknown as { aborted: boolean }).aborted) {
+          await new Promise(resolve => setTimeout(resolve, 5));
+        }
+        return createFailureResult('timeout', 'hedge aborted', true);
+      }
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.winner.provider).toBe('fireworks');
+    expect(primaryResolved).toBe(true);
+    expect(legSignals['openrouter']?.aborted).toBe(true);
+  });
 });
