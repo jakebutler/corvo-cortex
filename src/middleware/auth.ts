@@ -16,13 +16,15 @@ let authCache = new Map<string, CacheEntry>();
 let namespaceIds = new WeakMap<object, string>();
 let namespaceCounter = 0;
 const DEFAULT_AUTH_CACHE_TTL_MS = 30_000;
+const MAX_AUTH_CACHE_TTL_MS = 300_000;
+const AUTH_CACHE_MAX_ENTRIES = 1_000;
 
 function getAuthCacheTtlMs(env: Env): number {
   const parsed = Number.parseInt(env.AUTH_CACHE_TTL_MS || '', 10);
   if (!Number.isFinite(parsed) || parsed <= 0) {
     return DEFAULT_AUTH_CACHE_TTL_MS;
   }
-  return parsed;
+  return Math.min(parsed, MAX_AUTH_CACHE_TTL_MS);
 }
 
 function getNamespaceCacheKey(env: Env, apiKey: string): string {
@@ -45,15 +47,23 @@ function fromAuthCache(cacheKey: string): CachedClient | undefined {
     authCache.delete(cacheKey);
     return undefined;
   }
+  authCache.delete(cacheKey);
+  authCache.set(cacheKey, entry);
   return entry.value;
 }
 
-function storeAuthCache(cacheKey: string, value: CachedClient, ttlMs: number): CachedClient {
+function storeAuthCache(cacheKey: string, value: CachedClient, ttlMs: number): void {
+  if (value === null) return;
+  authCache.delete(cacheKey);
   authCache.set(cacheKey, {
     value,
     expiresAt: Date.now() + ttlMs
   });
-  return value;
+  while (authCache.size > AUTH_CACHE_MAX_ENTRIES) {
+    const oldest = authCache.keys().next().value;
+    if (oldest === undefined) break;
+    authCache.delete(oldest);
+  }
 }
 
 async function getClientFromCacheOrKv(
@@ -67,7 +77,8 @@ async function getClientFromCacheOrKv(
   }
 
   const client = await env.CORTEX_CLIENTS.get(apiKey, { type: 'json' }) as CachedClient;
-  return storeAuthCache(cacheKey, client, getAuthCacheTtlMs(env));
+  storeAuthCache(cacheKey, client, getAuthCacheTtlMs(env));
+  return client;
 }
 
 /**
@@ -75,6 +86,13 @@ async function getClientFromCacheOrKv(
  *
  * Extracts Bearer token from Authorization header, validates against KV store,
  * and attaches client config to context.
+ *
+ * Caching semantics: only positive lookups are cached, in a bounded LRU cache
+ * (max 1,000 entries) with a TTL clamped to at most 5 minutes. Negative lookups
+ * are never cached, so garbage keys cannot grow the cache. Because the cache is
+ * per-isolate, key revocation propagates within AUTH_CACHE_TTL_MS (default 30s,
+ * max 5 min) per isolate; different PoPs may observe different views during
+ * that window.
  */
 export const authMiddleware: MiddlewareHandler<{ Bindings: Env; Variables: Variables }> = async (c, next) => {
   // 1. Extract API key from Authorization header
@@ -145,4 +163,12 @@ export function __clearAuthCacheForTests(): void {
   authCache = new Map<string, CacheEntry>();
   namespaceIds = new WeakMap<object, string>();
   namespaceCounter = 0;
+}
+
+export function __getAuthCacheSizeForTests(): number {
+  return authCache.size;
+}
+
+export function __getAuthCacheTtlForTests(env: Env): number {
+  return getAuthCacheTtlMs(env);
 }
