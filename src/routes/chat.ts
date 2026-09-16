@@ -18,7 +18,7 @@ import {
   markProviderCreditsExhausted
 } from '../services/credits';
 import { getAdapterForProvider } from '../utils/transform';
-import { resolveModelAlias } from '../utils/model-aliases';
+import { resolveModelAliasFromEnv } from '../utils/model-aliases';
 import { createStreamingResponseWithUsage } from '../utils/streaming';
 import { fetchWithRetry } from '../utils/retry';
 import { chatCompletionRequestSchema } from '../schemas/chat';
@@ -198,7 +198,7 @@ async function handleHeaderDrivenRequest(
     return c.json(errorPayload, 400);
   }
 
-  const model = resolveModelAlias(hints.requestedModel || body.model || client.defaultModel || 'gpt-4o');
+  const model = await resolveModelAliasFromEnv(hints.requestedModel || body.model || client.defaultModel || 'gpt-4o', c.env);
   const routePlan = buildRoutePlan(policy, hints, model);
 
   updateTelemetryMetadata(c, 'unresolved', routePlan.model || model, rawBody, {
@@ -449,7 +449,7 @@ async function handleLegacyRequest(
   requestStart: number,
   hasRetriedCreditFallback = false
 ): Promise<Response> {
-  const model = resolveModelAlias(body.model || client.defaultModel || 'gpt-4o');
+  const model = await resolveModelAliasFromEnv(body.model || client.defaultModel || 'gpt-4o', c.env);
   const routeId = createLegacyRouteId();
 
   let route: Awaited<ReturnType<typeof determineProvider>>;
@@ -484,7 +484,8 @@ async function handleLegacyRequest(
     return c.json(errorPayload, 500);
   }
 
-  updateTelemetryMetadata(c, route.provider, model, rawBody);
+  const wireModel = route.model;
+  updateTelemetryMetadata(c, route.provider, wireModel, rawBody);
 
   const circuitCheck = await checkCircuitBreaker(c.env, route.provider);
   if (!circuitCheck.allowed) {
@@ -496,7 +497,7 @@ async function handleLegacyRequest(
     storeResponseData(c, errorPayload);
     setCorvoHeadersOnContext(c, {
       provider: route.provider,
-      model,
+      model: wireModel,
       routeId,
       fallbackUsed: Boolean(route.fallback),
       hedgeUsed: false,
@@ -516,7 +517,7 @@ async function handleLegacyRequest(
       storeResponseData(c, errorPayload);
       setCorvoHeadersOnContext(c, {
         provider: route.provider,
-        model,
+        model: wireModel,
         routeId,
         fallbackUsed: false,
         hedgeUsed: false,
@@ -534,25 +535,26 @@ async function handleLegacyRequest(
         'HTTP-Referer': 'https://cortex.corvolabs.com',
         'X-Title': 'Corvo Cortex'
       },
+      model: wireModel,
       fallback: { reason: 'insufficient_credits', from: route.provider }
     };
   }
 
   const adapter = getAdapterForProvider(route.provider);
   const finalBalance = await getCreditBalance(c.env, route.provider);
-  const providerRequest = adapter.transformRequest({ ...body, model });
-  const concurrency = await acquireProviderConcurrencyLease(c.env, route.provider, model);
+  const providerRequest = adapter.transformRequest({ ...body, model: wireModel });
+  const concurrency = await acquireProviderConcurrencyLease(c.env, route.provider, wireModel);
 
   if (!concurrency.allowed) {
     const errorPayload = {
       error: 'Provider concurrency limit reached',
       provider: route.provider,
-      details: `Z.ai concurrency limit reached for model ${model}: ${concurrency.inFlight}/${concurrency.limit} in-flight`
+      details: `Z.ai concurrency limit reached for model ${wireModel}: ${concurrency.inFlight}/${concurrency.limit} in-flight`
     };
     storeResponseData(c, errorPayload);
     setCorvoHeadersOnContext(c, {
       provider: route.provider,
-      model,
+      model: wireModel,
       routeId,
       fallbackUsed: Boolean(route.fallback),
       hedgeUsed: false,
@@ -614,7 +616,7 @@ async function handleLegacyRequest(
       storeResponseData(c, errorPayload);
       setCorvoHeadersOnContext(c, {
         provider: route.provider,
-        model,
+        model: wireModel,
         routeId,
         fallbackUsed: Boolean(route.fallback),
         hedgeUsed: false,
@@ -650,7 +652,7 @@ async function handleLegacyRequest(
             const cost = await estimateCostFromUsage({
               env: c.env,
               provider: route.provider,
-              model,
+              model: wireModel,
               promptTokens: usage.prompt_tokens || 0,
               completionTokens: usage.completion_tokens || 0
             });
@@ -685,7 +687,7 @@ async function handleLegacyRequest(
 
         setCorvoHeadersOnResponse(streamingResponse, {
           provider: route.provider,
-          model,
+          model: wireModel,
           routeId,
           fallbackUsed: Boolean(route.fallback),
           hedgeUsed: false,
@@ -708,7 +710,7 @@ async function handleLegacyRequest(
       console.warn('Response validation failed:', responseValidation.error.errors);
     }
 
-    const openaiResponse = adapter.transformResponse(responseData, model);
+    const openaiResponse = adapter.transformResponse(responseData, wireModel);
     storeResponseData(c, openaiResponse);
     if (openaiResponse.usage) {
       storeTelemetryUsage(c, openaiResponse.usage);
@@ -718,7 +720,7 @@ async function handleLegacyRequest(
       const cost = await estimateCostFromUsage({
         env: c.env,
         provider: route.provider,
-        model,
+        model: wireModel,
         promptTokens: openaiResponse.usage.prompt_tokens || 0,
         completionTokens: openaiResponse.usage.completion_tokens || 0
       });
@@ -727,7 +729,7 @@ async function handleLegacyRequest(
 
     setCorvoHeadersOnContext(c, {
       provider: route.provider,
-      model,
+      model: wireModel,
       routeId,
       fallbackUsed: Boolean(route.fallback),
       hedgeUsed: false,
@@ -748,7 +750,7 @@ async function handleLegacyRequest(
     storeResponseData(c, errorPayload);
     setCorvoHeadersOnContext(c, {
       provider: route.provider,
-      model,
+      model: wireModel,
       routeId,
       fallbackUsed: Boolean(route.fallback),
       hedgeUsed: false,
@@ -868,9 +870,9 @@ function parseTtftMs(headers: Headers): number | undefined {
 
 function getRawModel(body: unknown, fallback: string): string {
   if (body && typeof body === 'object') {
-    const model = (body as { model?: unknown }).model;
-    if (typeof model === 'string' && model.trim().length > 0) {
-      return model;
+    const rawModel = (body as { model?: unknown }).model;
+    if (typeof rawModel === 'string' && rawModel.trim().length > 0) {
+      return rawModel;
     }
   }
 

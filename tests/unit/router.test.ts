@@ -7,7 +7,7 @@ describe('determineProvider', () => {
   const mockClient: ClientConfig = {
     appId: 'test-app',
     name: 'Test App',
-    defaultModel: 'gpt-5-2',
+    defaultModel: 'gpt-5.2',
     allowZai: true,
     fallbackStrategy: 'openrouter',
     rateLimit: {
@@ -55,7 +55,7 @@ describe('determineProvider', () => {
 
   it('should route to OpenAI for gpt models with credits', async () => {
     const envWithCredits = { ...mockEnv, CREDITS_OPENAI: 'true' };
-    const route = await determineProvider('gpt-5-2', mockClient, envWithCredits);
+    const route = await determineProvider('gpt-5.2', mockClient, envWithCredits);
     expect(route.provider).toBe('openai-direct');
     expect(route.url).toContain('openai.com');
   });
@@ -85,5 +85,56 @@ describe('determineProvider', () => {
     // When no model is specified in request, chat.ts falls back to client.defaultModel (already aliased)
     const route = await determineProvider(mockClient.defaultModel, mockClient, envWithCredits);
     expect(route.provider).toBe('openai-direct');
+  });
+
+  it('should not route crafted names to direct providers', async () => {
+    const envWithCredits = {
+      ...mockEnv,
+      CREDITS_OPENAI: 'true',
+      CREDITS_ANTHROPIC: 'true'
+    } as Env;
+
+    const notClaude = await determineProvider('not-claude', mockClient, envWithCredits);
+    expect(notClaude.provider).toBe('openrouter');
+
+    const proxyGpt = await determineProvider('my-gpt-proxy', mockClient, envWithCredits);
+    expect(proxyGpt.provider).toBe('openrouter');
+
+    const claudeish = await determineProvider('gerald-claude-thing', mockClient, envWithCredits);
+    expect(claudeish.provider).toBe('openrouter');
+  });
+
+  it('routes vendor-prefixed openai ids to OpenAI direct with the prefix stripped', async () => {
+    const envWithCredits = { ...mockEnv, CREDITS_OPENAI: 'true' };
+    const route = await determineProvider('openai/gpt-5', mockClient, envWithCredits);
+
+    expect(route.provider).toBe('openai-direct');
+    expect(route.model).toBe('gpt-5');
+  });
+
+  it('routes vendor-prefixed anthropic ids to Anthropic direct with the prefix stripped', async () => {
+    const envWithCredits = { ...mockEnv, CREDITS_ANTHROPIC: 'true' };
+    const route = await determineProvider('anthropic/claude-sonnet-4-6', mockClient, envWithCredits);
+
+    expect(route.provider).toBe('anthropic-direct');
+    expect(route.model).toBe('claude-sonnet-4-6');
+  });
+
+  it('keeps mismatched or unknown vendor prefixes on OpenRouter verbatim', async () => {
+    const envWithCredits = { ...mockEnv, CREDITS_OPENAI: 'true' };
+
+    const mismatched = await determineProvider('anthropic/gpt-5', mockClient, envWithCredits);
+    expect(mismatched.provider).toBe('openrouter');
+    expect(mismatched.model).toBe('anthropic/gpt-5');
+
+    const unknownVendor = await determineProvider('mistral/mixtral-8x7b', mockClient, envWithCredits);
+    expect(unknownVendor.provider).toBe('openrouter');
+    expect(unknownVendor.model).toBe('mistral/mixtral-8x7b');
+  });
+
+  it('routes without vendor prefixes using the plain name as the wire model', async () => {
+    const route = await determineProvider('glm-5', mockClient, mockEnv);
+    expect(route.provider).toBe('z-ai-pro');
+    expect(route.model).toBe('glm-5');
   });
 });
