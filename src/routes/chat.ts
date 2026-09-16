@@ -354,6 +354,7 @@ async function handleHeaderDrivenRequest(
       } catch (error) {
         if (reservationId) void releaseCreditsReservation(c.env, route.provider, reservationId);
         await recordCircuitBreakerFailure(c.env, route.provider);
+        logUpstreamException(route.provider, error);
         return classifyUnknownFailure(error);
       }
 
