@@ -11,7 +11,7 @@ import { CircuitBreaker } from './durable-objects/circuit-breaker';
 import { CreditLedger } from './durable-objects/credit-ledger';
 import { ProviderConcurrency } from './durable-objects/provider-concurrency';
 import { refreshAllModelCatalogs } from './services/models-catalog';
-import { syncOpenRouterCredits } from './services/credits';
+import { syncOpenRouterCredits, clearAllProviderExhaustion } from './services/credits';
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -83,6 +83,12 @@ export default {
       await syncOpenRouterCredits(env);
     } catch (error) {
       console.error('OpenRouter credit sync failed:', error);
+    }
+
+    try {
+      await clearAllProviderExhaustion(env);
+    } catch (error) {
+      console.error('Credit exhaustion recovery failed:', error);
     }
   }
 };

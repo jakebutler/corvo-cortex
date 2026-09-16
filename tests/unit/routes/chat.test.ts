@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { Hono } from 'hono';
 import chatApp from '../../../src/routes/chat';
+import { setCreditBalance, getCreditBalance } from '../../../src/services/credits';
 import {
     createMockKV,
     createMockClientConfig,
@@ -460,6 +461,105 @@ describe('Chat Route - /v1/chat/completions', () => {
             const json = await response.json() as { error: string; provider: string };
             expect(json.error).toBe('Provider error');
             expect(json.provider).toBeDefined();
+        });
+
+        it('does not zero the ledger when a provider 400 mentions quota', async () => {
+            const quotaEnv = createMockEnv({
+                CREDITS_ANTHROPIC: 'true',
+                CREDITS_OPENAI: undefined,
+                CORTEX_CLIENTS: createMockKV({
+                    [TEST_API_KEY]: createMockClientConfig({ fallbackStrategy: 'fail-fast' })
+                })
+            });
+            await setCreditBalance(quotaEnv, 'anthropic-direct', 2.5, 'USD');
+
+            globalThis.fetch = vi.fn().mockImplementation(async (url: string) => {
+                if (url.includes('anthropic.com')) {
+                    return new Response(JSON.stringify({
+                        error: { type: 'quota_exceeded', message: 'Your quota is exhausted for this model' }
+                    }), {
+                        status: 400,
+                        headers: { 'Content-Type': 'application/json' }
+                    });
+                }
+                return new Response('Not found', { status: 404 });
+            });
+
+            const request = new Request('http://localhost/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${TEST_API_KEY}`
+                },
+                body: JSON.stringify({
+                    model: 'claude-sonnet-4-6',
+                    messages: [{ role: 'user', content: 'Hello' }]
+                })
+            });
+
+            const response = await chatApp.fetch(request, quotaEnv, mockExecutionCtx);
+            expect(response.status).toBe(400);
+
+            const balance = await getCreditBalance(quotaEnv, 'anthropic-direct');
+            expect(balance.balance).toBeCloseTo(2.5, 6);
+            expect(balance.exhausted).toBe(false);
+        });
+
+        it('returns 402 when the reservation exceeds the available floor', async () => {
+            const lowBalanceEnv = createMockEnv({
+                CREDITS_OPENAI: 'true',
+                CORTEX_CLIENTS: createMockKV({
+                    [TEST_API_KEY]: createMockClientConfig({ fallbackStrategy: 'fail-fast' })
+                })
+            });
+            await setCreditBalance(lowBalanceEnv, 'openai-direct', 0.001, 'USD');
+
+            const request = new Request('http://localhost/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${TEST_API_KEY}`
+                },
+                body: JSON.stringify({
+                    model: 'gpt-4o',
+                    messages: [{ role: 'user', content: 'Hello' }]
+                })
+            });
+
+            const response = await chatApp.fetch(request, lowBalanceEnv, mockExecutionCtx);
+
+            expect(response.status).toBe(402);
+            const json = await response.json() as { error: string };
+            expect(json.error).toBe('Payment Required');
+            expect(globalThis.fetch).not.toHaveBeenCalledWith(expect.stringContaining('openai.com'), expect.anything());
+        });
+
+        it('falls back to OpenRouter when the reservation declines with a fallback strategy', async () => {
+            const lowBalanceEnv = createMockEnv({
+                CREDITS_OPENAI: 'true',
+                CREDITS_ANTHROPIC: undefined
+            });
+            await setCreditBalance(lowBalanceEnv, 'openai-direct', 0.001, 'USD');
+
+            const request = new Request('http://localhost/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${TEST_API_KEY}`
+                },
+                body: JSON.stringify({
+                    model: 'gpt-4o',
+                    messages: [{ role: 'user', content: 'Hello' }]
+                })
+            });
+
+            const response = await chatApp.fetch(request, lowBalanceEnv, mockExecutionCtx);
+
+            expect(response.status).toBe(200);
+            expect(globalThis.fetch).toHaveBeenCalledWith(
+                expect.stringContaining('openrouter.ai'),
+                expect.anything()
+            );
         });
     });
 

@@ -106,17 +106,57 @@ export function createMockCreditLedger(): DurableObjectNamespace {
         balance: number;
         currency: 'USD' | 'credits';
         configured: boolean;
+        reserved: number;
+        exhaustedUntil: number | null;
     };
+    type Reservation = { amount: number; expiresAt: number };
 
     const stateById = new Map<string, LedgerState>();
+    const reservationsById = new Map<string, Map<string, Reservation>>();
     const getState = (id: string): LedgerState => {
         const existing = stateById.get(id);
         if (existing) return existing;
 
-        const initial: LedgerState = { balance: 0, currency: 'USD', configured: false };
+        const initial: LedgerState = {
+            balance: 0,
+            currency: 'USD',
+            configured: false,
+            reserved: 0,
+            exhaustedUntil: null
+        };
         stateById.set(id, initial);
         return initial;
     };
+    const getReservations = (id: string): Map<string, Reservation> => {
+        const existing = reservationsById.get(id);
+        if (existing) return existing;
+
+        const initial = new Map<string, Reservation>();
+        reservationsById.set(id, initial);
+        return initial;
+    };
+    const expireStale = (id: string): void => {
+        const state = getState(id);
+        const now = Date.now();
+        for (const [resId, reservation] of getReservations(id)) {
+            if (reservation.expiresAt <= now) {
+                state.reserved = Math.max(state.reserved - reservation.amount, 0);
+                getReservations(id).delete(resId);
+            }
+        }
+        if (state.exhaustedUntil !== null && state.exhaustedUntil <= now) {
+            state.exhaustedUntil = null;
+        }
+    };
+    const balanceView = (state: LedgerState) => ({
+        balance: state.balance,
+        available: state.balance - state.reserved,
+        reserved: state.reserved,
+        currency: state.currency,
+        lastUpdated: new Date().toISOString(),
+        configured: state.configured,
+        exhausted: state.exhaustedUntil !== null && state.exhaustedUntil > Date.now()
+    });
 
     const createStub = (id: string) => ({
         fetch: async (request: Request) => {
@@ -125,12 +165,8 @@ export function createMockCreditLedger(): DurableObjectNamespace {
             const current = getState(id);
 
             if (path === '/balance') {
-                return new Response(JSON.stringify({
-                    balance: current.balance,
-                    currency: current.currency,
-                    configured: current.configured,
-                    lastUpdated: new Date().toISOString()
-                }), {
+                expireStale(id);
+                return new Response(JSON.stringify(balanceView(current)), {
                     status: 200,
                     headers: { 'Content-Type': 'application/json' }
                 });
@@ -140,12 +176,8 @@ export function createMockCreditLedger(): DurableObjectNamespace {
                 current.balance = body.balance ?? current.balance;
                 current.currency = body.currency ?? current.currency;
                 current.configured = true;
-                return new Response(JSON.stringify({
-                    balance: current.balance,
-                    currency: current.currency,
-                    configured: current.configured,
-                    lastUpdated: new Date().toISOString()
-                }), {
+                current.exhaustedUntil = null;
+                return new Response(JSON.stringify(balanceView(current)), {
                     status: 200,
                     headers: { 'Content-Type': 'application/json' }
                 });
@@ -155,12 +187,7 @@ export function createMockCreditLedger(): DurableObjectNamespace {
                 current.balance += body.delta ?? 0;
                 current.currency = body.currency ?? current.currency;
                 current.configured = true;
-                return new Response(JSON.stringify({
-                    balance: current.balance,
-                    currency: current.currency,
-                    configured: current.configured,
-                    lastUpdated: new Date().toISOString()
-                }), {
+                return new Response(JSON.stringify(balanceView(current)), {
                     status: 200,
                     headers: { 'Content-Type': 'application/json' }
                 });
@@ -168,7 +195,7 @@ export function createMockCreditLedger(): DurableObjectNamespace {
             if (path === '/deduct') {
                 const body = await request.json() as { cost?: number };
                 const cost = body.cost ?? 0;
-                if (current.balance < cost) {
+                if (current.balance - current.reserved < cost) {
                     return new Response(JSON.stringify({ error: 'Insufficient credits' }), {
                         status: 402,
                         headers: { 'Content-Type': 'application/json' }
@@ -176,12 +203,76 @@ export function createMockCreditLedger(): DurableObjectNamespace {
                 }
                 current.balance -= cost;
                 current.configured = true;
+                return new Response(JSON.stringify(balanceView(current)), {
+                    status: 200,
+                    headers: { 'Content-Type': 'application/json' }
+                });
+            }
+            if (path === '/reserve') {
+                const body = await request.json() as { amount?: number; ttlMs?: number };
+                const amount = body.amount ?? 0;
+                expireStale(id);
+                if (current.exhaustedUntil !== null && current.exhaustedUntil > Date.now()) {
+                    return new Response(JSON.stringify({ error: 'Provider credits exhausted' }), {
+                        status: 402,
+                        headers: { 'Content-Type': 'application/json' }
+                    });
+                }
+                if (current.balance - current.reserved < amount) {
+                    return new Response(JSON.stringify({ error: 'Insufficient credits' }), {
+                        status: 402,
+                        headers: { 'Content-Type': 'application/json' }
+                    });
+                }
+                const reservationId = `reservation-${Math.random().toString(36).slice(2, 12)}`;
+                getReservations(id).set(reservationId, {
+                    amount,
+                    expiresAt: Date.now() + (body.ttlMs && body.ttlMs > 0 ? body.ttlMs : 600_000)
+                });
+                current.reserved += amount;
+                current.configured = true;
                 return new Response(JSON.stringify({
-                    balance: current.balance,
-                    currency: current.currency,
-                    configured: current.configured,
-                    lastUpdated: new Date().toISOString()
+                    ok: true,
+                    reservationId,
+                    amount,
+                    available: current.balance - current.reserved
                 }), {
+                    status: 200,
+                    headers: { 'Content-Type': 'application/json' }
+                });
+            }
+            if (path === '/settle') {
+                const body = await request.json() as { reservationId?: string; actualCost?: number };
+                const reservation = body.reservationId
+                    ? getReservations(id).get(body.reservationId)
+                    : undefined;
+                if (body.reservationId) {
+                    getReservations(id).delete(body.reservationId);
+                }
+                current.reserved = Math.max(current.reserved - (reservation?.amount ?? 0), 0);
+                current.balance -= body.actualCost ?? 0;
+                current.exhaustedUntil = null;
+                current.configured = true;
+                return new Response(JSON.stringify({
+                    ok: true,
+                    reservationFound: Boolean(reservation),
+                    ...balanceView(current)
+                }), {
+                    status: 200,
+                    headers: { 'Content-Type': 'application/json' }
+                });
+            }
+            if (path === '/markExhausted') {
+                const body = await request.json().catch(() => ({}) as { ttlMs?: number });
+                current.exhaustedUntil = Date.now() + (body.ttlMs && body.ttlMs > 0 ? body.ttlMs : 900_000);
+                return new Response(JSON.stringify(balanceView(current)), {
+                    status: 200,
+                    headers: { 'Content-Type': 'application/json' }
+                });
+            }
+            if (path === '/clearExhausted') {
+                current.exhaustedUntil = null;
+                return new Response(JSON.stringify(balanceView(current)), {
                     status: 200,
                     headers: { 'Content-Type': 'application/json' }
                 });
