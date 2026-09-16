@@ -36,13 +36,21 @@ export async function refreshDigitalOceanModelCatalog(env: Env): Promise<StoredM
 
   catalogRefreshInFlight = (async () => {
     const models = await fetchDigitalOceanModels(env);
-    if (models.length === 0) return;
+    if (models.length === 0) {
+      console.warn('DO catalog refresh yielded 0 models; bootstrap-trusting the mapping table');
+      return;
+    }
     if (!env.CORTEX_CONFIG || typeof env.CORTEX_CONFIG.put !== 'function') return;
     const catalog: StoredModelCatalog = { updatedAt: new Date().toISOString(), models };
     try {
       await env.CORTEX_CONFIG.put(CATALOG_KEY, JSON.stringify(catalog));
-    } catch {
-      // KV write failure leaves us bootstrap-trusting the mapping instead.
+      console.warn(JSON.stringify({
+        source: 'do-catalog-refresh',
+        count: models.length,
+        slugs: models.slice(0, 12).map((m) => m.id)
+      }));
+    } catch (error) {
+      console.warn(`DO catalog KV write failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   })();
   try {
