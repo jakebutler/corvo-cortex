@@ -72,6 +72,7 @@ export interface Env {
   OPENROUTER_PROVISIONING_API_KEY?: string;
   MINIMAX_API_KEY: string;
   FIREWORKS_API_KEY: string;
+  ADMIN_API_KEY?: string;
 
   // LangFuse (secrets)
   LANGFUSE_PUBLIC_KEY: string;

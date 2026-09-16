@@ -21,7 +21,6 @@ describe('Admin Route - /admin', () => {
         return {
             CORTEX_CLIENTS: createMockKV({
                 [TEST_API_KEY]: createMockClientConfig(),
-                [ADMIN_API_KEY]: createMockClientConfig({ admin: true }),
                 [usageKey]: usageData
             }),
             CORTEX_CONFIG: createMockKV(),
@@ -35,6 +34,7 @@ describe('Admin Route - /admin', () => {
             LANGFUSE_SECRET_KEY: 'test',
             CIRCUIT_BREAKER: {} as unknown as DurableObjectNamespace,
             CREDIT_LEDGER: createMockCreditLedger(),
+            ADMIN_API_KEY: ADMIN_API_KEY,
             ENVIRONMENT: 'test',
             ...overrides
         } as Env;
@@ -55,7 +55,7 @@ describe('Admin Route - /admin', () => {
             expect(response.status).toBe(401);
         });
 
-        it('should return 403 for non-admin API key', async () => {
+        it('should return 401 for a valid client key that is not the admin secret', async () => {
             const request = new Request('http://localhost/usage', {
                 method: 'GET',
                 headers: { 'Authorization': `Bearer ${TEST_API_KEY}` }
@@ -63,7 +63,7 @@ describe('Admin Route - /admin', () => {
 
             const response = await adminApp.fetch(request, mockEnv);
 
-            expect(response.status).toBe(403);
+            expect(response.status).toBe(401);
         });
 
         it('should pass for admin API key', async () => {
@@ -93,7 +93,8 @@ describe('Admin Route - /admin', () => {
                 usage: RateLimitUsage;
                 client: unknown;
             };
-            expect(json.apiKey).toBe(TEST_API_KEY);
+            expect(json.apiKey).not.toContain(TEST_API_KEY);
+            expect(json.apiKey).toContain('…');
             expect(json.usage.requests).toBe(5);
             expect(json.usage.tokens).toBe(250);
             expect(json.client).toBeDefined();
@@ -291,6 +292,116 @@ describe('Admin Route - /admin', () => {
 
             expect(getResponse.status).toBe(200);
             expect(json.policy.version).toBe('override-v2');
+        });
+    });
+
+    describe('Admin hardening', () => {
+        it('authenticates via the ADMIN_API_KEY secret without a KV client record', async () => {
+            const request = new Request('http://localhost/credits', {
+                headers: { 'Authorization': `Bearer ${ADMIN_API_KEY}` }
+            });
+
+            const response = await adminApp.fetch(request, mockEnv);
+
+            expect(response.status).toBe(200);
+        });
+
+        it('fails closed when the ADMIN_API_KEY secret is not configured', async () => {
+            const envWithoutSecret = createMockEnv({ ADMIN_API_KEY: undefined });
+            const request = new Request('http://localhost/credits', {
+                headers: { 'Authorization': `Bearer ${ADMIN_API_KEY}` }
+            });
+
+            const response = await adminApp.fetch(request, envWithoutSecret);
+
+            expect(response.status).toBe(503);
+            const json = await response.json() as { error: string };
+            expect(json.error).toContain('not configured');
+        });
+
+        it('emits an audit log entry for admin mutations', async () => {
+            const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+            const request = new Request('http://localhost/credits/set', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${ADMIN_API_KEY}`
+                },
+                body: JSON.stringify({ provider: 'openrouter', balance: 42, currency: 'USD' })
+            });
+
+            const response = await adminApp.fetch(request, mockEnv);
+            expect(response.status).toBe(200);
+
+            const auditLines = warnSpy.mock.calls
+                .map((call) => String(call[0]))
+                .filter((line) => line.includes('"admin-audit"'))
+                .map((line) => JSON.parse(line) as { action: string; provider: string; to: number });
+
+            expect(auditLines.length).toBe(1);
+            expect(auditLines[0].action).toBe('credits.set');
+            expect(auditLines[0].provider).toBe('openrouter');
+            expect(auditLines[0].to).toBe(42);
+            warnSpy.mockRestore();
+        });
+
+        it('rejects zero pricing without the allowZero override', async () => {
+            const request = new Request('http://localhost/pricing', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${ADMIN_API_KEY}`
+                },
+                body: JSON.stringify({
+                    provider: 'openai-direct',
+                    pricing: { 'gpt-5.2': { input: 0, output: 2 } }
+                })
+            });
+
+            const response = await adminApp.fetch(request, mockEnv);
+
+            expect(response.status).toBe(400);
+            const json = await response.json() as { error: string; entries: string[] };
+            expect(json.error).toContain('allowZero');
+            expect(json.entries).toEqual(['gpt-5.2']);
+        });
+
+        it('rejects negative pricing outright', async () => {
+            const request = new Request('http://localhost/pricing', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${ADMIN_API_KEY}`
+                },
+                body: JSON.stringify({
+                    provider: 'openai-direct',
+                    pricing: { 'gpt-5.2': { input: -1, output: 2 } }
+                })
+            });
+
+            const response = await adminApp.fetch(request, mockEnv);
+
+            expect(response.status).toBe(400);
+        });
+
+        it('accepts zero pricing with the allowZero override', async () => {
+            const request = new Request('http://localhost/pricing', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${ADMIN_API_KEY}`
+                },
+                body: JSON.stringify({
+                    provider: 'openai-direct',
+                    allowZero: true,
+                    pricing: { 'gpt-5.2': { input: 0, output: 2 } }
+                })
+            });
+
+            const response = await adminApp.fetch(request, mockEnv);
+
+            expect(response.status).toBe(200);
         });
     });
 });
