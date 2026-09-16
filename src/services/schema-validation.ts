@@ -1,6 +1,32 @@
 import type { RouteFailureReason } from './route-executor';
 
-const schemaCache = new Map<string, Record<string, unknown>>();
+const MAX_SCHEMA_DEPTH = 64;
+const MAX_PATTERN_LENGTH = 256;
+
+const SUPPORTED_TYPES = new Set(['object', 'array', 'string', 'number', 'integer', 'boolean', 'null']);
+
+const UNSUPPORTED_KEYWORDS = [
+  '$ref',
+  '$defs',
+  'definitions',
+  'not',
+  'if',
+  'then',
+  'else',
+  'patternProperties',
+  'multipleOf',
+  'uniqueItems',
+  'minProperties',
+  'maxProperties',
+  'contains',
+  'propertyNames',
+  'dependencies',
+  'dependentSchemas',
+  'dependentRequired',
+  'format'
+];
+
+const NESTED_QUANTIFIER_TEST = /\((?:[^()\\]|\\.)*[+*]\s*\)\s*[+*{]/;
 
 export interface StrictSchemaContext {
   enabled: boolean;
@@ -21,23 +47,19 @@ export function buildStrictSchemaContext(body: unknown): StrictSchemaContext {
     return { enabled: false };
   }
 
-  try {
-    const cacheKey = JSON.stringify(schema);
-    if (!schemaCache.has(cacheKey)) {
-      schemaCache.set(cacheKey, schema);
-    }
-
-    return {
-      enabled: true,
-      schema: schemaCache.get(cacheKey)
-    };
-  } catch (error) {
+  const problems = lintSchemaForStrictSupport(schema);
+  if (problems.length > 0) {
     return {
       enabled: true,
       schema,
-      compileError: error instanceof Error ? error.message : 'Failed to cache schema'
+      compileError: problems.slice(0, 5).join('; ')
     };
   }
+
+  return {
+    enabled: true,
+    schema
+  };
 }
 
 export function validateStrictSchemaPayload(
@@ -62,6 +84,14 @@ export function validateStrictSchemaPayload(
       valid: false,
       reason: 'schema_invalid',
       message: parseResult.message
+    };
+  }
+
+  if (measureDepth(parseResult.parsed) > MAX_SCHEMA_DEPTH) {
+    return {
+      valid: false,
+      reason: 'schema_invalid',
+      message: `Payload exceeds maximum nesting depth of ${MAX_SCHEMA_DEPTH}`
     };
   }
 
@@ -148,14 +178,20 @@ function normalizeJsonPayload(payload: unknown): { valid: true; parsed: unknown 
 function validateJsonSchema(
   value: unknown,
   schema: Record<string, unknown>,
-  path: string
+  path: string,
+  depth = 0
 ): string[] {
   const errors: string[] = [];
+
+  if (depth > MAX_SCHEMA_DEPTH) {
+    errors.push(`${path} exceeds maximum nesting depth of ${MAX_SCHEMA_DEPTH}`);
+    return errors;
+  }
 
   if (schema.anyOf && Array.isArray(schema.anyOf)) {
     const anyOfValid = schema.anyOf.some((subSchema) => {
       if (!isPlainObject(subSchema)) return false;
-      return validateJsonSchema(value, subSchema, path).length === 0;
+      return validateJsonSchema(value, subSchema, path, depth + 1).length === 0;
     });
     if (!anyOfValid) {
       errors.push(`${path} failed anyOf validation`);
@@ -166,7 +202,7 @@ function validateJsonSchema(
   if (schema.allOf && Array.isArray(schema.allOf)) {
     for (const subSchema of schema.allOf) {
       if (!isPlainObject(subSchema)) continue;
-      errors.push(...validateJsonSchema(value, subSchema, path));
+      errors.push(...validateJsonSchema(value, subSchema, path, depth + 1));
       if (errors.length > 0) return errors;
     }
   }
@@ -174,7 +210,7 @@ function validateJsonSchema(
   if (schema.oneOf && Array.isArray(schema.oneOf)) {
     const matches = schema.oneOf.filter((subSchema) => {
       if (!isPlainObject(subSchema)) return false;
-      return validateJsonSchema(value, subSchema, path).length === 0;
+      return validateJsonSchema(value, subSchema, path, depth + 1).length === 0;
     }).length;
     if (matches !== 1) {
       errors.push(`${path} failed oneOf validation`);
@@ -225,7 +261,8 @@ function validateJsonSchema(
         errors.push(...validateJsonSchema(
           propertyValue,
           childSchema,
-          `${path}/${key}`
+          `${path}/${key}`,
+          depth + 1
         ));
 
         if (errors.length > 0) {
@@ -260,7 +297,7 @@ function validateJsonSchema(
       for (let i = 0; i < value.length; i++) {
         // nosemgrep: javascript.lang.security.audit.object-injection.object-injection
         // eslint-disable-next-line security/detect-object-injection
-        errors.push(...validateJsonSchema(value[i], schema.items, `${path}/${i}`));
+        errors.push(...validateJsonSchema(value[i], schema.items, `${path}/${i}`, depth + 1));
         if (errors.length > 0) {
           return errors;
         }
@@ -354,7 +391,7 @@ function matchesType(value: unknown, typeName: string): boolean {
     case 'null':
       return value === null;
     default:
-      return true;
+      return false;
   }
 }
 
@@ -363,5 +400,146 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 function deepEqual(left: unknown, right: unknown): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
+  if (left === right) return true;
+  if (left === null || right === null) return false;
+  if (typeof left !== typeof right) return false;
+
+  if (Array.isArray(left) || Array.isArray(right)) {
+    if (!Array.isArray(left) || !Array.isArray(right)) return false;
+    if (left.length !== right.length) return false;
+    return left.every((item, index) => {
+      // nosemgrep: javascript.lang.security.audit.object-injection.object-injection
+      // eslint-disable-next-line security/detect-object-injection
+      return deepEqual(item, right[index]);
+    });
+  }
+
+  if (typeof left === 'object') {
+    const leftRecord = left as Record<string, unknown>;
+    const rightRecord = right as Record<string, unknown>;
+    const leftKeys = Object.keys(leftRecord);
+    const rightKeys = Object.keys(rightRecord);
+    if (leftKeys.length !== rightKeys.length) return false;
+    return leftKeys.every((key) => {
+      // nosemgrep: javascript.lang.security.audit.object-injection.object-injection
+      // eslint-disable-next-line security/detect-object-injection
+      const leftValue = leftRecord[key];
+      if (!Object.prototype.hasOwnProperty.call(rightRecord, key)) return false;
+      // nosemgrep: javascript.lang.security.audit.object-injection.object-injection
+      // eslint-disable-next-line security/detect-object-injection
+      return deepEqual(leftValue, rightRecord[key]);
+    });
+  }
+
+  return false;
+}
+
+function lintSchemaForStrictSupport(schema: Record<string, unknown>): string[] {
+  const problems: string[] = [];
+  lintSchemaNode(schema, '$', problems, 0);
+  return problems;
+}
+
+function lintSchemaNode(
+  schema: Record<string, unknown>,
+  path: string,
+  problems: string[],
+  depth: number
+): void {
+  if (depth > MAX_SCHEMA_DEPTH) {
+    problems.push(`${path} exceeds maximum schema nesting depth of ${MAX_SCHEMA_DEPTH}`);
+    return;
+  }
+
+  for (const keyword of UNSUPPORTED_KEYWORDS) {
+    if (Object.prototype.hasOwnProperty.call(schema, keyword)) {
+      problems.push(`${path} uses unsupported keyword '${keyword}'`);
+    }
+  }
+
+  if (schema.type !== undefined) {
+    const typeEntries = Array.isArray(schema.type) ? schema.type : [schema.type];
+    for (const entry of typeEntries) {
+      if (typeof entry !== 'string' || !SUPPORTED_TYPES.has(entry)) {
+        problems.push(`${path} uses unsupported type '${String(entry)}'`);
+      }
+    }
+  }
+
+  if (typeof schema.pattern === 'string') {
+    problems.push(...lintPattern(schema.pattern, path));
+  }
+
+  const properties = isPlainObject(schema.properties) ? schema.properties : undefined;
+  if (properties) {
+    for (const [key, childSchema] of Object.entries(properties)) {
+      if (!isPlainObject(childSchema)) continue;
+      lintSchemaNode(childSchema, `${path}/${key}`, problems, depth + 1);
+    }
+  }
+
+  if (isPlainObject(schema.additionalProperties)) {
+    lintSchemaNode(schema.additionalProperties, `${path}/additionalProperties`, problems, depth + 1);
+  }
+
+  if (isPlainObject(schema.items)) {
+    lintSchemaNode(schema.items, `${path}/items`, problems, depth + 1);
+  }
+
+  for (const combinator of ['anyOf', 'allOf', 'oneOf']) {
+    // nosemgrep: javascript.lang.security.audit.object-injection.object-injection
+    // eslint-disable-next-line security/detect-object-injection
+    const branch = schema[combinator];
+    if (!Array.isArray(branch)) continue;
+    for (let i = 0; i < branch.length; i++) {
+      // nosemgrep: javascript.lang.security.audit.object-injection.object-injection
+      // eslint-disable-next-line security/detect-object-injection
+      const subSchema = branch[i];
+      if (!isPlainObject(subSchema)) continue;
+      lintSchemaNode(subSchema, `${path}/${combinator}/${i}`, problems, depth + 1);
+    }
+  }
+}
+
+function measureDepth(value: unknown): number {
+  if (Array.isArray(value)) {
+    let max = 0;
+    for (const item of value) {
+      max = Math.max(max, measureDepth(item));
+    }
+    return max + 1;
+  }
+
+  if (isPlainObject(value)) {
+    let max = 0;
+    for (const child of Object.values(value)) {
+      max = Math.max(max, measureDepth(child));
+    }
+    return max + 1;
+  }
+
+  return 0;
+}
+
+function lintPattern(pattern: string, path: string): string[] {  const problems: string[] = [];
+
+  if (pattern.length > MAX_PATTERN_LENGTH) {
+    problems.push(`${path} pattern exceeds maximum length of ${MAX_PATTERN_LENGTH} characters`);
+    return problems;
+  }
+
+  try {
+    // nosemgrep: javascript.lang.security.audit.non-literal-regexp.non-literal-regexp
+    // eslint-disable-next-line security/detect-non-literal-regexp
+    new RegExp(pattern);
+  } catch {
+    problems.push(`${path} pattern is not a valid regular expression`);
+    return problems;
+  }
+
+  if (NESTED_QUANTIFIER_TEST.test(pattern)) {
+    problems.push(`${path} pattern uses a nested quantifier which risks catastrophic backtracking`);
+  }
+
+  return problems;
 }

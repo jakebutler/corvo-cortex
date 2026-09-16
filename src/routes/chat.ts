@@ -183,6 +183,20 @@ async function handleHeaderDrivenRequest(
   }
 
   const strictSchemaContext = buildStrictSchemaContext(rawBody);
+  if (strictSchemaContext.enabled && strictSchemaContext.compileError) {
+    const errorPayload = {
+      error: {
+        class: 'invalid_request',
+        message: `Invalid response_format.json_schema strict schema: ${strictSchemaContext.compileError}`
+      }
+    };
+    storeResponseData(c, errorPayload);
+    setCorvoHeadersOnContext(c, {
+      model: getRawModel(rawBody, client.defaultModel),
+      latencyMs: Date.now() - requestStart
+    });
+    return c.json(errorPayload, 400);
+  }
   if (strictSchemaContext.enabled && body.stream) {
     const errorPayload = {
       error: {
