@@ -59,6 +59,10 @@ export async function refreshAllModelCatalogs(
       if (catalog) {
         catalogs.push(catalog);
         setRefreshResult(results, provider, { ok: true, count: catalog.models.length });
+        if (catalog.models.length === 0) {
+          console.warn(`Model catalog refresh for ${provider} produced 0 models`);
+          setRefreshResult(results, provider, { ok: false, count: 0, error: 'Refresh produced 0 models' });
+        }
       } else {
         setRefreshResult(results, provider, { ok: false, count: 0, error: 'No catalog data' });
       }
@@ -74,9 +78,7 @@ export async function refreshAllModelCatalogs(
 
   const merged = mergeCatalogs(catalogs);
   if (env.CORTEX_CONFIG && typeof env.CORTEX_CONFIG.put === 'function') {
-    await env.CORTEX_CONFIG.put(ALL_MODELS_KEY, JSON.stringify(merged), {
-      expirationTtl: 60 * 60 * 24 * 30
-    });
+    await env.CORTEX_CONFIG.put(ALL_MODELS_KEY, JSON.stringify(merged));
   }
 
   return results;
@@ -135,9 +137,7 @@ async function refreshProviderCatalog(env: Env, provider: ModelProvider, openrou
   };
 
   if (env.CORTEX_CONFIG && typeof env.CORTEX_CONFIG.put === 'function') {
-    await env.CORTEX_CONFIG.put(getModelCatalogKey(provider), JSON.stringify(catalog), {
-      expirationTtl: 60 * 60 * 24 * 30
-    });
+    await env.CORTEX_CONFIG.put(getModelCatalogKey(provider), JSON.stringify(catalog));
   }
 
   return catalog;
@@ -159,7 +159,7 @@ async function fetchOpenAIModels(env: Env, openrouterRaw: OpenRouterRawModel[] |
 
   const fromOpenRouter = openrouterRaw
     ? deriveOpenRouterSubset(openrouterRaw, 'openai', {
-        includeIds: (id) => /^openai\/gpt-5/i.test(id),
+        includeIds: (id) => /^openai\/gpt-5/i.test(id) && !id.includes(':'),
         limit: 12
       })
     : [];
@@ -196,8 +196,9 @@ async function fetchOpenAIModels(env: Env, openrouterRaw: OpenRouterRawModel[] |
 }
 
 function isOpenAIChatOrImage(id: string): boolean {
-  const allow = /^(gpt-5|gpt-5\\.|gpt-5-)/i.test(id);
+  const allow = /^gpt-5/i.test(id);
   if (!allow) return false;
+  if (id.includes(':')) return false;
   const deny = /(embedding|moderation|whisper|tts|audio|transcribe|realtime|search|assistant|vision-beta|eval|code-embedding)/i.test(id);
   return !deny;
 }
@@ -231,8 +232,12 @@ function getOpenAIFallbackModels(): ModelRecord[] {
 async function fetchAnthropicModels(env: Env, openrouterRaw: OpenRouterRawModel[] | null): Promise<ModelRecord[]> {
   const fromOpenRouter = openrouterRaw
     ? deriveOpenRouterSubset(openrouterRaw, 'anthropic', {
-        includeIds: (id) => /^anthropic\/claude/i.test(id),
-        limit: 10
+        includeIds: (id) => /^anthropic\/claude/i.test(id) && !id.includes(':'),
+        limit: 10,
+        normalizeId: (_fullId, strippedId) => ({
+          id: normalizeAnthropicId(strippedId),
+          routing: 'direct'
+        })
       })
     : [];
 
@@ -329,14 +334,16 @@ function isChatOrImageModalities(modalities?: { input?: string[]; output?: strin
 }
 
 async function fetchZaiModels(): Promise<ModelRecord[]> {
-  const fallback = ['glm-4.7', 'glm-4.7-flash', 'glm-4.7-flashx'];
+  const fallback = ['glm-5.3', 'glm-5.3-flash', 'glm-5-turbo'];
   const names = new Set<string>();
 
   try {
     const response = await fetch(ZAI_CHAT_COMPLETION_URL);
     if (response.ok) {
       const text = await response.text();
-      const matches = text.matchAll(/glm-4\\.7(?:-flashx|-flash)?/gi);
+      // nosemgrep: javascript.lang.security.audit.unsafe-regex.unsafe-regex
+      // eslint-disable-next-line security/detect-unsafe-regex
+      const matches = text.matchAll(/glm-5(?:\.[0-9]+)?(?:-flashx|-flash|-turbo)?/gi);
       for (const match of matches) {
         names.add(match[0].toLowerCase());
       }
@@ -348,11 +355,11 @@ async function fetchZaiModels(): Promise<ModelRecord[]> {
   const finalNames = names.size ? Array.from(names) : fallback;
 
   return finalNames
-    .filter(name => name.startsWith('glm-4.7'))
+    .filter(name => name.startsWith('glm-5'))
     .map(name => ({
       id: name,
-      provider: 'z-ai',
-      name: name.toUpperCase().replace('GLM-', 'GLM-'),
+      provider: 'z-ai' as const,
+      name: name.toUpperCase(),
       modalities: { input: ['text'], output: ['text'] }
     }));
 }
@@ -437,17 +444,16 @@ function normalizeFireworksIds(models: unknown[]): string[] {
 
 async function fetchGeminiModels(openrouterRaw: OpenRouterRawModel[] | null): Promise<ModelRecord[]> {
   const fallback = [
-    'gemini-3-pro-preview',
-    'gemini-3-pro-image-preview',
-    'gemini-3-flash-preview',
-    'gemini-2.5-flash',
-    'gemini-2.5-flash-preview-09-2025'
+    'google/gemini-3-pro-preview',
+    'google/gemini-3-flash-preview',
+    'google/gemini-2.5-flash'
   ];
 
   const fromOpenRouter = openrouterRaw
     ? deriveOpenRouterSubset(openrouterRaw, 'gemini', {
         includeIds: (id) => /(google\/)?gemini-3|gemini-2\.5/i.test(id),
-        limit: 10
+        limit: 10,
+        normalizeId: (fullId) => ({ id: fullId, routing: 'openrouter-only' })
       })
     : [];
 
@@ -464,11 +470,11 @@ async function fetchGeminiModels(openrouterRaw: OpenRouterRawModel[] | null): Pr
     const matches = html.matchAll(/Model code `([^`]+)`/g);
     for (const match of matches) {
       if (match[1] && match[1].startsWith('gemini-')) {
-        codes.add(match[1]);
+        codes.add(`google/${match[1]}`);
       }
     }
 
-    const filtered = Array.from(codes).filter(code => code.startsWith('gemini-3') || code.startsWith('gemini-2.5'));
+    const filtered = Array.from(codes).filter(code => code.includes('gemini-3') || code.includes('gemini-2.5'));
     const finalList = filtered.length ? filtered : fallback;
     return finalList.map(id => geminiRecord(id));
   } catch {
@@ -535,31 +541,55 @@ function geminiRecord(id: string): ModelRecord {
     id,
     provider: 'gemini',
     name: id,
-    modalities: isImage ? { input: ['text', 'image'], output: ['image', 'text'] } : { input: ['text'], output: ['text'] }
+    modalities: isImage ? { input: ['text', 'image'], output: ['image', 'text'] } : { input: ['text'], output: ['text'] },
+    metadata: { source: 'openrouter-only' }
   };
+}
+
+interface DeriveOptions {
+  includeIds: (id: string) => boolean;
+  limit: number;
+  normalizeId?: (fullId: string, strippedId: string) => { id: string; routing: 'direct' | 'openrouter-only' };
+}
+
+/**
+ * OpenRouter uses dot-separated version segments for Claude (claude-sonnet-4.5);
+ * the Anthropic direct API uses dashes (claude-sonnet-4-5).
+ */
+function normalizeAnthropicId(id: string): string {
+  return id.replace(/(\d)\.(\d)/g, '$1-$2');
 }
 
 function deriveOpenRouterSubset(
   models: OpenRouterRawModel[],
   provider: ModelProvider,
-  options: { includeIds: (id: string) => boolean; limit: number }
+  options: DeriveOptions
 ): ModelRecord[] {
   const scored = models
     .filter(model => options.includeIds(model.id))
-    .map(model => ({
-      id: model.id.includes('/') ? model.id.split('/').slice(1).join('/') : model.id,
-      provider,
-      name: model.name || model.id,
-      modalities: {
-        input: model.architecture?.input_modalities || inferModalities(model.architecture?.modality, 'input'),
-        output: model.architecture?.output_modalities || inferModalities(model.architecture?.modality, 'output')
-      },
-      context_length: model.context_length,
-      metadata: {
-        created: model.created,
-        source: 'openrouter'
-      }
-    }))
+    .map(model => {
+      const fullId = model.id;
+      const strippedId = fullId.includes('/') ? fullId.split('/').slice(1).join('/') : fullId;
+      const normalized = options.normalizeId
+        ? options.normalizeId(fullId, strippedId)
+        : { id: strippedId, routing: 'direct' as const };
+
+      return {
+        id: normalized.id,
+        provider,
+        name: model.name || fullId,
+        modalities: {
+          input: model.architecture?.input_modalities || inferModalities(model.architecture?.modality, 'input'),
+          output: model.architecture?.output_modalities || inferModalities(model.architecture?.modality, 'output')
+        },
+        context_length: model.context_length,
+        metadata: {
+          created: model.created,
+          source: 'openrouter',
+          routing: normalized.routing
+        }
+      };
+    })
     .filter(model => isChatOrImageModalities(model.modalities));
 
   scored.sort((a, b) => {
