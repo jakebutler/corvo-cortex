@@ -45,12 +45,12 @@ export class CreditLedger {
         return this.json({ error: 'Invalid payload' }, 400);
       }
 
-    const updated: CreditLedgerState = {
-      balance: body.balance,
-      currency: body.currency,
-      lastUpdated: new Date().toISOString(),
-      configured: true
-    };
+      const updated: CreditLedgerState = {
+        balance: body.balance,
+        currency: body.currency,
+        lastUpdated: new Date().toISOString(),
+        configured: true
+      };
 
       await this.state.storage.put(STATE_KEY, updated);
       return this.json(updated);
@@ -63,12 +63,12 @@ export class CreditLedger {
       }
 
       const current = await this.getState();
-    const updated: CreditLedgerState = {
-      balance: current.balance + body.delta,
-      currency: body.currency || current.currency,
-      lastUpdated: new Date().toISOString(),
-      configured: true
-    };
+      const updated: CreditLedgerState = {
+        balance: current.balance + body.delta,
+        currency: body.currency || current.currency,
+        lastUpdated: new Date().toISOString(),
+        configured: true
+      };
 
       await this.state.storage.put(STATE_KEY, updated);
       return this.json(updated);
@@ -85,12 +85,12 @@ export class CreditLedger {
         return this.json({ error: 'Insufficient credits' }, 402);
       }
 
-    const updated: CreditLedgerState = {
-      balance: current.balance - body.cost,
-      currency: current.currency,
-      lastUpdated: new Date().toISOString(),
-      configured: true
-    };
+      const updated: CreditLedgerState = {
+        balance: current.balance - body.cost,
+        currency: current.currency,
+        lastUpdated: new Date().toISOString(),
+        configured: true
+      };
 
       await this.state.storage.put(STATE_KEY, updated);
       return this.json(updated);

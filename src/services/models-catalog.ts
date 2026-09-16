@@ -352,7 +352,7 @@ async function fetchZaiModels(): Promise<ModelRecord[]> {
     .map(name => ({
       id: name,
       provider: 'z-ai',
-      name: name.toUpperCase().replace('GLM-', 'GLM-'),
+      name: name.toUpperCase(),
       modalities: { input: ['text'], output: ['text'] }
     }));
 }

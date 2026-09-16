@@ -2,43 +2,6 @@
  * Streaming utilities for LLM responses
  */
 
-/**
- * Creates a streaming response from an upstream fetch response
- * Handles Server-Sent Events (SSE) format
- */
-export async function createStreamingResponse(upstreamResponse: Response): Promise<Response> {
-  if (!upstreamResponse.body) {
-    return new Response('No response body', { status: 500 });
-  }
-
-  const reader = upstreamResponse.body.getReader();
-  const _decoder = new TextDecoder();
-
-  const stream = new ReadableStream({
-    async start(controller) {
-      try {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          controller.enqueue(value);
-        }
-        controller.close();
-      } catch (error) {
-        controller.error(error);
-      }
-    }
-  });
-
-  return new Response(stream, {
-    headers: {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      'Connection': 'keep-alive',
-      'X-Accel-Buffering': 'no' // Disable nginx buffering
-    }
-  });
-}
-
 interface UsageInfo {
   prompt_tokens?: number;
   completion_tokens?: number;
