@@ -46,9 +46,11 @@ Comprehensive documentation is available in the [`/docs`](./docs) directory:
 | Smart Routing | [provider-routing.md](./docs/features/provider-routing.md) |
 | Authentication | [authentication.md](./docs/features/authentication.md) |
 | Rate Limiting | [rate-limiting.md](./docs/features/rate-limiting.md) |
+| Spend Guardrails | [spend-guardrails.md](./docs/features/spend-guardrails.md) |
 | Circuit Breaker | [circuit-breaker.md](./docs/features/circuit-breaker.md) |
 | Streaming | [streaming.md](./docs/features/streaming.md) |
 | Telemetry | [telemetry.md](./docs/features/telemetry.md) |
+| Security Audit (2026-09) | [audit/](./docs/audit/README.md) |
 
 ## Quick Start
 
@@ -371,4 +373,4 @@ MIT License - see LICENSE file for details.
 
 ---
 
-**Corvo Cortex v2.2** - Built with Cloudflare Workers + Hono
+**Corvo Cortex v2.4** - Built with Cloudflare Workers + Hono

@@ -59,7 +59,7 @@ app.use('*', cors({
 
 // Health check
 app.get('/', (c) => {
-  return c.json({ name: 'Corvo Cortex', version: '2.2.0', status: 'healthy' });
+  return c.json({ name: 'Corvo Cortex', version: '2.4.0', status: 'healthy' });
 });
 
 // Mount routes
