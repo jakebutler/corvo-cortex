@@ -1,7 +1,121 @@
-import type { Env } from '../types';
+import type { Env, TelemetryMode } from '../types';
 
 export const DEFAULT_LANGFUSE_BASE_URL = 'https://us.cloud.langfuse.com';
 const INGEST_PATH = '/api/public/ingestion';
+
+const REDACTIONS_CONFIG_KEY = 'config:telemetry-redactions';
+const REDACTIONS_CACHE_TTL_MS = 60_000;
+const MAX_PAYLOAD_CHARS = 50_000;
+const REDACTED = '[REDACTED]';
+
+const DEFAULT_REDACTION_PATTERNS: string[] = [
+  'sk-[A-Za-z0-9_-]{8,}',
+  'Bearer [A-Za-z0-9._~+/-]+=?',
+  'x-api-key["\\s:=]+[A-Za-z0-9_-]{8,}'
+];
+
+let redactionCache: { patterns: RegExp[]; loadedAt: number } | null = null;
+
+export async function getRedactionPatterns(env: Env): Promise<RegExp[]> {
+  const now = Date.now();
+  if (redactionCache && now - redactionCache.loadedAt < REDACTIONS_CACHE_TTL_MS) {
+    return redactionCache.patterns;
+  }
+
+  let sources = DEFAULT_REDACTION_PATTERNS;
+  try {
+    const configured = env.CORTEX_CONFIG
+      ? await env.CORTEX_CONFIG.get(REDACTIONS_CONFIG_KEY, { type: 'json' }) as unknown
+      : null;
+    if (Array.isArray(configured)) {
+      const valid = configured
+        .filter((entry): entry is string => typeof entry === 'string')
+        .filter(source => isSafeRegex(source));
+      if (valid.length > 0) {
+        sources = valid;
+      }
+    }
+  } catch {
+    // fall back to built-in patterns
+  }
+
+  const patterns = sources
+    .map(source => {
+      try {
+        // nosemgrep: javascript.lang.security.audit.non-literal-regexp.non-literal-regexp
+        // eslint-disable-next-line security/detect-non-literal-regexp
+        return new RegExp(source, 'g');
+      } catch {
+        return null;
+      }
+    })
+    .filter((pattern): pattern is RegExp => pattern !== null);
+
+  redactionCache = { patterns, loadedAt: now };
+  return patterns;
+}
+
+export function resetRedactionCacheForTests(): void {
+  redactionCache = null;
+}
+
+function isSafeRegex(source: string): boolean {
+  if (source.length > 256) return false;
+  try {
+    // nosemgrep: javascript.lang.security.audit.non-literal-regexp.non-literal-regexp
+    // eslint-disable-next-line security/detect-non-literal-regexp
+    new RegExp(source);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function redactPayload(value: unknown, patterns: RegExp[], depth = 0): unknown {
+  if (depth > 24) return '[DEPTH_LIMIT]';
+  if (typeof value === 'string') {
+    let redacted = value;
+    for (const pattern of patterns) {
+      pattern.lastIndex = 0;
+      redacted = redacted.replace(pattern, REDACTED);
+    }
+    return redacted;
+  }
+  if (Array.isArray(value)) {
+    return value.map(item => redactPayload(item, patterns, depth + 1));
+  }
+  if (value !== null && typeof value === 'object') {
+    const source = value as Record<string, unknown>;
+    const result: Record<string, unknown> = {};
+    for (const key of Object.keys(source)) {
+      // nosemgrep: javascript.lang.security.audit.object-injection.object-injection
+      // eslint-disable-next-line security/detect-object-injection
+      result[key] = redactPayload(source[key], patterns, depth + 1);
+    }
+    return result;
+  }
+  return value;
+}
+
+export function truncatePayload(value: unknown, maxChars = MAX_PAYLOAD_CHARS): unknown {
+  if (value === undefined || value === null) return value;
+  let serialized: string;
+  try {
+    serialized = JSON.stringify(value);
+  } catch {
+    return { truncated: true, preview: String(value).slice(0, maxChars) };
+  }
+  if (serialized.length <= maxChars) return value;
+  return {
+    truncated: true,
+    originalChars: serialized.length,
+    preview: serialized.slice(0, maxChars)
+  };
+}
+
+export function resolveTelemetryMode(mode: unknown): TelemetryMode {
+  return mode === 'metadata' || mode === 'off' ? mode : 'full';
+}
 
 interface TraceUsage {
   promptTokens: number;

@@ -7,6 +7,7 @@ import {
   updateTelemetryMetadata,
   storeResponseData,
   storeTelemetryUsage,
+  storeTelemetryCost,
   setTelemetryCompletion
 } from '../middleware/telemetry';
 import { determineProvider } from '../services/router';
@@ -365,6 +366,7 @@ async function handleHeaderDrivenRequest(
             promptTokens: usage.prompt_tokens || 0,
             completionTokens: usage.completion_tokens || 0
           });
+          storeTelemetryCost(c, cost);
 
           await deductCredits(c.env, winnerProvider, cost);
         },
@@ -424,6 +426,7 @@ async function handleHeaderDrivenRequest(
       promptTokens: responsePayload.usage.prompt_tokens || 0,
       completionTokens: responsePayload.usage.completion_tokens || 0
     });
+    storeTelemetryCost(c, cost);
     await deductCredits(c.env, winnerProvider, cost);
   }
 
@@ -654,6 +657,7 @@ async function handleLegacyRequest(
               promptTokens: usage.prompt_tokens || 0,
               completionTokens: usage.completion_tokens || 0
             });
+            storeTelemetryCost(c, cost);
             await deductCredits(c.env, route.provider, cost);
           },
           onDone: async () => {
@@ -722,6 +726,7 @@ async function handleLegacyRequest(
         promptTokens: openaiResponse.usage.prompt_tokens || 0,
         completionTokens: openaiResponse.usage.completion_tokens || 0
       });
+      storeTelemetryCost(c, cost);
       await deductCredits(c.env, route.provider, cost);
     }
 
