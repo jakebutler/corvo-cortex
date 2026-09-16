@@ -256,13 +256,33 @@ export async function fetchDigitalOceanModels(env: Env): Promise<ModelRecord[]> 
   }
 
   if (!response.ok) {
+    console.warn(`DigitalOcean model catalog fetch failed (status ${response.status})`);
     return [];
   }
 
-  const payload = await response.json() as { data?: Array<{ id?: unknown; owned_by?: unknown }> };
-  const models = Array.isArray(payload?.data) ? payload.data : [];
+  const rawBody = await response.text();
+  let payload: { data?: Array<{ id?: unknown; owned_by?: unknown }> } | unknown[] | null = null;
+  try {
+    payload = JSON.parse(rawBody);
+  } catch {
+    console.warn('DigitalOcean model catalog response is not JSON');
+    return [];
+  }
 
-  return models
+  type CatalogItem = { id?: unknown; owned_by?: unknown };
+  const asItems = (value: unknown): CatalogItem[] =>
+    Array.isArray(value) ? (value as CatalogItem[]) : [];
+  const payloadRecord = payload as { data?: unknown; models?: unknown };
+  const items: CatalogItem[] = Array.isArray(payload)
+    ? (payload as CatalogItem[])
+    : asItems(payloadRecord.data) || asItems(payloadRecord.models) || [];
+
+  if (items.length === 0) {
+    console.warn(`DigitalOcean model catalog parsed 0 models. Body head: ${rawBody.slice(0, 300)}`);
+    return [];
+  }
+
+  return items
     .filter((model): model is { id: string; owned_by?: string } => typeof model?.id === 'string')
     .map((model): ModelRecord => ({
       id: model.id,
