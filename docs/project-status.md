@@ -1,7 +1,7 @@
 # Project Status
 
-**Current Version:** 2.2.0  
-**Last Updated:** February 11, 2026
+**Current Version:** 2.4.0  
+**Last Updated:** September 15, 2026
 
 ---
 
@@ -10,7 +10,7 @@
 | Environment | Status | URL |
 |-------------|--------|-----|
 | Production | ✅ Active | `cortex.corvolabs.com` |
-| Preview | ✅ Active | `corvo-cortex.*.workers.dev` |
+| Preview | ✅ Active | `corvo-cortex-preview.*.workers.dev` |
 
 ---
 
@@ -18,11 +18,12 @@
 
 | Provider | Integration | Notes |
 |----------|-------------|-------|
-| Anthropic | ✅ Complete | Claude 3.5 Sonnet, Haiku |
-| OpenAI | ✅ Complete | GPT-4o, GPT-4o-mini |
-| Z.ai | ✅ Complete | GLM-4-plus |
+| Anthropic | ✅ Complete | Claude 4.x family (direct, credits-gated) |
+| OpenAI | ✅ Complete | GPT-5.x family (direct, credits-gated) |
+| Z.ai | ✅ Complete | GLM-5.x family |
 | OpenRouter | ✅ Complete | Fallback provider |
-| MiniMax | ✅ Complete | MiniMax-M2 |
+| MiniMax | ✅ Complete | MiniMax-M2.x (Anthropic-format) |
+| Fireworks | ✅ Complete | Catalog-driven preemption + `/v1/responses` proxy |
 
 ---
 
@@ -37,16 +38,17 @@
 
 2. **Analytics endpoints return LangFuse links**
    - Location: `src/routes/analytics.ts`
-   - Impact: Cost/metrics endpoints point to LangFuse dashboard
-   - Reason: By design - LangFuse is the source of truth for analytics
+   - Impact: Cost/metrics endpoints point to Langfuse dashboard
+   - Reason: By design - Langfuse is the source of truth for analytics
 
 3. **Upstream Langfuse SDK issue in Workers (tracked externally)**
    - Issue: https://github.com/langfuse/langfuse/issues/11984
-   - Impact: SDK v3 flush path may report success without persisted traces in Cloudflare Workers.
+   - Impact: Historical; the SDK is no longer used (direct ingestion API).
    - Workaround in Corvo Cortex: use direct Langfuse ingestion API transport (`/api/public/ingestion`).
 
 ### Resolved Recently
 
+- ✅ Audit remediation epic #4 (2026-09): auth cache DoS, spend guardrails, ledger reserve-then-settle, breaker persistence, strict-schema hardening, error sanitization, routing correctness, catalog pipeline, adapter correctness, telemetry minimization, admin hardening, dependency remediation
 - ✅ ESM module loading errors (fixed in 2.3.0)
 - ✅ Production/preview namespace collision (fixed in 2.3.0)
 - ✅ Lodash security vulnerability (fixed in 2.3.0)
@@ -68,9 +70,7 @@ Run tests: `npm test` or `npm run test:coverage`
 
 ## Upcoming Work
 
-*Document planned work here:*
-
-- [ ] *Add planned items as they are identified*
+- [ ] DigitalOcean serverless inference provider integration (#23–#26)
 
 ---
 
@@ -80,6 +80,7 @@ Run tests: `npm test` or `npm run test:coverage`
 
 | Date | Summary |
 |------|---------|
+| 2026-09-15 | Audit remediation epic: P0–P3 issues #5–#22 |
 | 2026-01-06 | Documentation system implementation |
 
 ---

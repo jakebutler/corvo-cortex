@@ -142,9 +142,10 @@ Provider-specific transformations are in `src/providers/*.ts`.
 
 ## Notes
 
-- Streaming responses do **not** include usage statistics
-- Telemetry logging is limited for streaming requests
-- Rate limiting still applies to streaming requests
+- Usage statistics are captured from SSE chunks when the provider emits them (OpenAI-format `usage` field; Anthropic-family `message_start`/`message_delta` events) and feed credit metering
+- Streaming telemetry waits for stream completion before final trace ingestion
+- Rate limiting is **disabled** on request-serving routes (see [Rate Limiting](./rate-limiting.md)); spend is bounded by the guardrails in [Spend Guardrails](./spend-guardrails.md) and the credit ledger
+- Client disconnects cancel the upstream request and release concurrency leases
 
 ---
 

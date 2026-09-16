@@ -8,7 +8,40 @@ This changelog follows [Keep a Changelog](https://keepachangelog.com/) format an
 
 ## [Unreleased]
 
+## [2.4.0] - 2026-09-15
+
 ### Added
+- Request-level spend guardrails: body-size limit (413), `max_tokens`/message/content caps (400), per-client `allowedModels` model allowlist (403).
+- Credit ledger reserve-then-settle semantics with reservation TTLs, `available` balance gating, TTL-based credit-exhaustion state, and cron auto-recovery.
+- Strict-schema validator hardening: pattern linting (length cap, nested-quantifier rejection), fail-closed rejection of unsupported keywords/unknown types, 64-level depth caps, order-insensitive `enum`/`const` object matching.
+- Upstream error sanitization: client-facing errors use a normalized `{ provider, status, class }` envelope; raw bodies kept server-side only.
+- Provider stream normalization: Anthropic-format SSE (anthropic-direct, minimax) is converted to OpenAI-format chunks; usage tapped for credit metering.
+- Explicit 4xx rejection of image/tool inputs on adapters that cannot serve them (no silent feature loss).
+- Per-client telemetry mode (`full | metadata | off`), payload redaction + 50 KB truncation, single cost computation per request.
+- Policy-level model allowlist (`allowedModels`, `allowClientModelPinning`) governing `x-kinisi-model` pinning.
+- Admin hardening: `ADMIN_API_KEY` secret auth (constant-time), mutation audit log, masked keys in `/admin/usage`, pricing/credit bounds validation.
+- KV-configurable model aliases (`config:model-aliases`).
+- `/admin/usage` masked-key, non-sensitive client fields.
+
+### Changed
+- Model routing now uses vendor-normalized prefix matching (no substring matching); vendor-prefixed ids route direct with the prefix stripped.
+- Alias table corrected against live catalogs (`gpt-4*` → `gpt-5.2`; GLM tiered to `glm-5.3`/`glm-5.3-flash`).
+- `/v1/responses` is Zod-validated (unknown fields stripped) and emits unified `x-corvo-cortex-*` headers (legacy headers deprecated).
+- Circuit breaker state persists across restarts; single DO instance owns all providers; `halfOpenMaxCalls` enforced.
+- Hedge losers are aborted; client disconnects cancel upstream calls; legacy upstream calls have a 30s server timeout; executor backoff has jitter.
+- Dependencies: hono patched (4.13.8), `langfuse` SDK removed, toolchain upgraded (vitest 4.1, wrangler 4.132, `@cloudflare/vitest-plugin`), 0 npm audit findings.
+- `compatibility_date` → 2026-09-01; production CORS restricted via `ALLOWED_ORIGINS`; `[env.preview]` added.
+
+### Fixed
+- Auth cache memory DoS: bounded LRU, no negative caching, TTL clamp.
+- False credit-exhaustion: "quota"-style provider errors no longer zero ledgers or force paid routing.
+- `/health/providers` now queries the circuit breaker instance that actually receives events.
+- Model catalog dead regexes, OpenRouter ID normalization, zero-model refresh warnings.
+
+### Security
+- Full adversarial remediation: see `docs/audit/` and issues #5–#22.
+
+### Added (pre-2.4.0, unreleased items below retained for history)
 - Header-driven routing hints on `POST /v1/chat/completions` via `x-kinisi-*` headers.
 - Stage/strategy-aware route planning with bounded fallback chains and optional delayed hedging (`week_n + speed + primary`).
 - Strict caller-schema enforcement for `response_format.json_schema` outputs with terminal `422 schema_invalid` behavior.

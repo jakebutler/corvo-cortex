@@ -38,38 +38,59 @@ Corvo Cortex is a **serverless AI Gateway and Smart Router** that acts as the ce
 
 ```
 src/
-├── index.ts                    # Entry point, route mounting, CORS config
+├── index.ts                    # Entry point, route mounting, CORS config, cron
 ├── types.ts                    # TypeScript interfaces and types
 ├── routes/
-│   ├── chat.ts                 # POST /v1/chat/completions
+│   ├── chat.ts                 # POST /v1/chat/completions (legacy + header mode)
+│   ├── responses.ts            # POST /v1/responses (Fireworks Responses API)
 │   ├── models.ts               # GET /v1/models
 │   ├── health.ts               # GET /health/providers, POST /health/reset/:provider
-│   ├── admin.ts                # GET /admin/usage, GET /admin/clients
+│   ├── admin.ts                # Admin surface: usage, clients, credits, pricing, policy
 │   └── analytics.ts            # GET /analytics/costs, /metrics, /export
 ├── middleware/
-│   ├── auth.ts                 # API key validation
-│   ├── rate-limit.ts           # Request/token quota enforcement
+│   ├── auth.ts                 # Client API key + admin secret validation
+│   ├── body-limit.ts           # Request body size cap (413)
+│   ├── rate-limit.ts           # Request/token quota enforcement (currently disabled on serving routes)
 │   └── telemetry.ts            # Langfuse trace logging + ingestion orchestration
 ├── providers/
-│   ├── base.ts                 # ProviderAdapter interface
-│   ├── anthropic.ts            # Claude API adapter
-│   ├── openai.ts               # GPT API adapter (pass-through)
+│   ├── base.ts                 # ProviderAdapter interface + wire-format types
+│   ├── anthropic.ts            # Claude/MiniMax Messages API adapter
+│   ├── openai.ts               # OpenAI/Fireworks adapter (pass-through)
 │   ├── zai.ts                  # GLM API adapter
 │   └── openrouter.ts           # OpenRouter fallback adapter
 ├── services/
-│   ├── router.ts               # Provider selection logic
-│   └── telemetry.ts            # Langfuse ingestion service
+│   ├── router.ts               # Provider selection (vendor-normalized prefix matching)
+│   ├── route-planner.ts        # Policy-driven route plans (candidates, hedge, retries)
+│   ├── route-executor.ts       # Plan execution: hedging, retries, leg abort
+│   ├── routing-hints.ts        # x-kinisi-* header parsing
+│   ├── routing-policy.ts       # KV-backed routing policy
+│   ├── schema-validation.ts    # Strict response_format.json_schema validation
+│   ├── models-catalog.ts       # Per-provider model catalogs (refresh + merge)
+│   ├── fireworks-models.ts     # Fireworks catalog scraping/refresh
+│   ├── credits.ts              # Credit ledger client, exhaustion heuristics, sync
+│   ├── pricing.ts              # Per-model pricing + cost estimation
+│   ├── provider-concurrency.ts # Provider concurrency lease client
+│   ├── model-authorization.ts  # Per-client / policy model allowlist matching
+│   └── telemetry.ts            # Langfuse ingestion service + redaction/truncation
 ├── schemas/
-│   ├── chat.ts                 # Request validation schemas
-│   └── response.ts             # Response validation schemas
+│   ├── chat.ts                 # Chat request validation + spend caps
+│   ├── response.ts             # Chat response schema
+│   ├── responses.ts            # /v1/responses request schema
+│   ├── routing-hints.ts        # x-kinisi-* header schemas
+│   └── routing-policy.ts       # Routing policy schema
 ├── utils/
-│   ├── headers.ts              # Header utilities
-│   ├── logger.ts               # Structured logging
-│   ├── retry.ts                # Exponential backoff retry
-│   ├── streaming.ts            # SSE stream handling
+│   ├── model-aliases.ts        # KV-configurable model alias table
+│   ├── corvo-cortex-headers.ts # x-corvo-cortex-* response headers
+│   ├── error-sanitizer.ts      # Upstream error envelope + server-side logging
+│   ├── limits.ts               # Body/max_tokens limit resolution
+│   ├── abort.ts                # AbortController helper
+│   ├── retry.ts                # Exponential backoff retry (signal-aware)
+│   ├── streaming.ts            # SSE stream handling + wire normalization
 │   └── transform.ts            # Provider adapter factory
 └── durable-objects/
-    └── circuit-breaker.ts      # Circuit breaker state machine
+    ├── circuit-breaker.ts      # Circuit breaker state machine (persistent, single instance)
+    ├── credit-ledger.ts        # Per-provider credit ledger (reserve/settle/exhaustion)
+    └── provider-concurrency.ts # Per-provider/model concurrency leases
 ```
 
 ---
@@ -86,14 +107,17 @@ interface ClientConfig {
   name: string;               // Display name
   defaultModel: string;       // Default model for requests
   allowZai: boolean;          // Allow Z.ai Pro routing
+  allowedModels?: string[];   // Per-client model allowlist (exact / prefix-glob / "*")
+  telemetry?: 'full' | 'metadata' | 'off';  // Telemetry mode (default "full")
   fallbackStrategy: 'openrouter' | 'fail-fast';
   rateLimit: {
     requestsPerMinute: number;
     tokensPerMinute: number;
   };
-  admin?: boolean;            // Admin privileges (optional)
 }
 ```
+
+Admin access is **not** part of ClientConfig — it is the `ADMIN_API_KEY` secret (see [Authentication](#authentication)).
 
 ### Rate Limit Tracking (when enabled)
 
@@ -120,7 +144,10 @@ interface Env {
   OPENAI_API_KEY: string;
   ZAI_API_KEY: string;
   OPENROUTER_API_KEY: string;
+  OPENROUTER_PROVISIONING_API_KEY?: string;  // /api/v1/credits sync
   MINIMAX_API_KEY: string;
+  FIREWORKS_API_KEY: string;
+  ADMIN_API_KEY?: string;                    // Admin surface credential (constant-time compare)
 
   // Langfuse (secrets)
   LANGFUSE_PUBLIC_KEY: string;
@@ -134,22 +161,28 @@ interface Env {
 
   // Durable Objects
   CIRCUIT_BREAKER: DurableObjectNamespace;
+  CREDIT_LEDGER: DurableObjectNamespace;
+  PROVIDER_CONCURRENCY?: DurableObjectNamespace;
 
   // Environment
   ENVIRONMENT: string;
-  ALLOWED_ORIGINS?: string;
+  ALLOWED_ORIGINS?: string;       // CORS allowlist (comma-separated)
+  AUTH_CACHE_TTL_MS?: string;     // Client lookup cache TTL (max 5 min)
+  MAX_BODY_BYTES?: string;        // Request body limit (default 2 MiB)
+  MAX_TOKENS_CEILING?: string;    // max_tokens ceiling (default 32768)
 }
 ```
 
 ### LLM Providers
 
 ```typescript
-type LLMProvider = 
-  | 'anthropic-direct' 
-  | 'openai-direct' 
-  | 'z-ai-pro' 
-  | 'openrouter' 
-  | 'minimax';
+type LLMProvider =
+  | 'anthropic-direct'
+  | 'openai-direct'
+  | 'z-ai-pro'
+  | 'openrouter'
+  | 'minimax'
+  | 'fireworks';
 ```
 
 ---
@@ -175,6 +208,7 @@ Authorization: Bearer sk-corvo-{app}-{random}
 |--------|------|------|-------------|
 | GET | `/v1/models` | Required | List available models and defaults |
 | POST | `/v1/chat/completions` | Required | Chat completion with smart routing |
+| POST | `/v1/responses` | Required | Fireworks Responses API proxy (Zod-validated) |
 
 #### Header-Driven Routing Hints (`POST /v1/chat/completions`)
 
@@ -343,6 +377,8 @@ All providers stream to clients as OpenAI-compatible SSE (see [Streaming](./feat
 - [Header Routing Client Integration](./features/header-routing-client-integration.md)
 - [Authentication](./features/authentication.md)
 - [Rate Limiting](./features/rate-limiting.md)
+- [Spend Guardrails](./features/spend-guardrails.md)
 - [Circuit Breaker](./features/circuit-breaker.md)
 - [Streaming](./features/streaming.md)
 - [Telemetry](./features/telemetry.md)
+- [Security Audit](./audit/README.md)
