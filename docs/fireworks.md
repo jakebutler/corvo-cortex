@@ -18,10 +18,22 @@ Corvo routes to Fireworks when:
 If Fireworks has insufficient credits, Corvo falls back to the next provider and indicates the fallback via response headers.
 
 ## Response Headers
-When a provider is selected, Corvo adds headers to the response:
-- `X-Corvo-Provider`
-- `X-Corvo-Fallback` (`true` or `false`)
-- `X-Corvo-Fallback-Reason` (e.g., `insufficient_credits`)
+When a provider is selected, Corvo adds the unified metadata headers:
+- `x-corvo-cortex-provider`
+- `x-corvo-cortex-model`
+- `x-corvo-cortex-fallback-used` (`true` / `false`)
+- `x-corvo-cortex-latency-ms`
+
+Legacy aliases `X-Corvo-Provider`, `X-Corvo-Fallback`, and `X-Corvo-Fallback-Reason` are still emitted on `/v1/responses` for one release and will be removed — migrate to the `x-corvo-cortex-*` names.
+
+## Request Validation (`/v1/responses`)
+Bodies are validated with Zod before any upstream call:
+- `model` (string, required)
+- `input` (string or array of items, required)
+- `stream`, `temperature` (0–2), `top_p` (0–1) optional
+- `max_output_tokens` optional, capped at the provider-safe ceiling (default 32,768; `MAX_TOKENS_CEILING`)
+
+Unknown fields are stripped before forwarding. Invalid JSON or schema violations return `400` with the JSON error envelope; bodies over the size limit (default 2 MiB, `MAX_BODY_BYTES`) return `413`.
 
 ## Model Catalog
 Fireworks model IDs are stored in KV as a cached catalog.

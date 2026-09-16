@@ -93,6 +93,8 @@ export interface Env {
   ENVIRONMENT: string;
   AUTH_CACHE_TTL_MS?: string;
   ALLOWED_ORIGINS?: string; // Comma-separated list of allowed origins for CORS
+  MAX_BODY_BYTES?: string; // Request body size limit (default 2 MiB)
+  MAX_TOKENS_CEILING?: string; // Provider-safe max_tokens ceiling (default 32768)
 }
 
 // Provider types

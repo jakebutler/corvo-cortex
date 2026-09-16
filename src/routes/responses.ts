@@ -1,6 +1,10 @@
 import { Hono } from 'hono';
-import type { Env, LLMProvider } from '../types';
+import type { Env, LLMProvider, Variables } from '../types';
 import { authMiddleware } from '../middleware/auth';
+import { requestBodyLimitMiddleware } from '../middleware/body-limit';
+import { getMaxTokensCeiling } from '../utils/limits';
+import { responsesRequestSchema } from '../schemas/responses';
+import { buildCorvoCortexHeaders, CorvoCortexHeaderInput } from '../utils/corvo-cortex-headers';
 import {
   telemetryMiddleware,
   updateTelemetryMetadata,
@@ -13,10 +17,18 @@ import { estimateCostFromUsage } from '../services/pricing';
 import { createStreamingResponseWithUsage } from '../utils/streaming';
 import { fetchWithRetry } from '../utils/retry';
 
-const responsesApp = new Hono<{ Bindings: Env }>();
+const responsesApp = new Hono<{ Bindings: Env; Variables: Variables }>();
 
 responsesApp.use('*', authMiddleware);
+responsesApp.use('*', requestBodyLimitMiddleware());
 responsesApp.use('*', telemetryMiddleware);
+
+function setCorvoHeaders(c: { header: (name: string, value: string) => void }, metadata: CorvoCortexHeaderInput): void {
+  const headers = buildCorvoCortexHeaders(metadata);
+  for (const [name, value] of Object.entries(headers)) {
+    c.header(name, value);
+  }
+}
 
 async function checkCircuitBreaker(
   env: Env,
@@ -67,18 +79,32 @@ async function recordCircuitBreakerFailure(env: Env, provider: string): Promise<
 }
 
 responsesApp.post('/', async (c) => {
-  const rawBody = await c.req.json();
-  c.set('requestBody', rawBody);
+  const requestStart = Date.now();
 
-  const requestedModel = typeof rawBody?.model === 'string' ? rawBody.model : 'unknown';
-  updateTelemetryMetadata(c, 'fireworks', requestedModel, rawBody);
-
-  const model = rawBody?.model as string | undefined;
-  if (!model || typeof model !== 'string') {
-    const errorPayload = { error: 'Invalid request', details: 'Missing model' };
+  let rawBody: unknown;
+  try {
+    rawBody = await c.req.json();
+  } catch {
+    const errorPayload = { error: 'Invalid request', details: 'Request body must be valid JSON' };
     storeResponseData(c, errorPayload);
+    setCorvoHeaders(c, { provider: 'fireworks', latencyMs: Date.now() - requestStart });
     return c.json(errorPayload, 400);
   }
+  c.set('requestBody', rawBody);
+
+  const validationResult = responsesRequestSchema(getMaxTokensCeiling(c.env)).safeParse(rawBody);
+  if (!validationResult.success) {
+    const errorPayload = {
+      error: 'Invalid request',
+      details: validationResult.error.errors
+    };
+    storeResponseData(c, errorPayload);
+    setCorvoHeaders(c, { provider: 'fireworks', latencyMs: Date.now() - requestStart });
+    return c.json(errorPayload, 400);
+  }
+
+  const body = validationResult.data;
+  const model = body.model;
 
   const provider: LLMProvider = 'fireworks';
   updateTelemetryMetadata(c, provider, model, rawBody);
@@ -91,11 +117,13 @@ responsesApp.post('/', async (c) => {
       provider
     };
     storeResponseData(c, errorPayload);
+    setCorvoHeaders(c, { provider, model, fallbackUsed: false, hedgeUsed: false, latencyMs: Date.now() - requestStart });
     return c.json(errorPayload, 503);
   }
 
   const balance = await getCreditBalance(c.env, provider);
   if (balance.configured && balance.balance <= 0) {
+    setCorvoHeaders(c, { provider, model, fallbackUsed: false, latencyMs: Date.now() - requestStart });
     c.header('X-Corvo-Provider', provider);
     c.header('X-Corvo-Fallback', 'false');
     c.header('X-Corvo-Fallback-Reason', 'insufficient_credits');
@@ -123,7 +151,7 @@ responsesApp.post('/', async (c) => {
       {
         method: 'POST',
         headers: route.headers,
-        body: JSON.stringify(rawBody)
+        body: JSON.stringify(body)
       },
       {
         maxRetries: 3,
@@ -151,7 +179,7 @@ responsesApp.post('/', async (c) => {
 
     await recordCircuitBreakerSuccess(c.env, route.provider);
 
-    const isStreaming = !!rawBody?.stream;
+    const isStreaming = body.stream === true;
     if (isStreaming) {
       let resolveTelemetryCompletion: (() => void) | undefined;
       const telemetryCompletion = new Promise<void>((resolve) => {
@@ -199,6 +227,16 @@ responsesApp.post('/', async (c) => {
             resolveTelemetryCompletion?.();
           }
         });
+        const streamHeaders = buildCorvoCortexHeaders({
+          provider,
+          model,
+          fallbackUsed: false,
+          hedgeUsed: false,
+          latencyMs: Date.now() - requestStart
+        });
+        for (const [name, value] of Object.entries(streamHeaders)) {
+          streamingResponse.headers.set(name, value);
+        }
         streamingResponse.headers.set('X-Corvo-Provider', provider);
         streamingResponse.headers.set('X-Corvo-Fallback', 'false');
         return streamingResponse;
@@ -228,6 +266,7 @@ responsesApp.post('/', async (c) => {
       await deductCredits(c.env, provider, cost);
     }
 
+    setCorvoHeaders(c, { provider, model, fallbackUsed: false, hedgeUsed: false, latencyMs: Date.now() - requestStart });
     c.header('X-Corvo-Provider', provider);
     c.header('X-Corvo-Fallback', 'false');
 
