@@ -60,28 +60,112 @@ export function createMockKV(data: Record<string, unknown> = {}): KVNamespace {
 }
 
 /**
- * Mock Circuit Breaker Durable Object
+ * Mock Circuit Breaker Durable Object (stateful, single instance)
  */
 export function createMockCircuitBreaker(): DurableObjectNamespace {
-    const mockStub = {
+    type BreakerData = {
+        provider: string;
+        state: 'closed' | 'open' | 'half-open';
+        failureCount: number;
+        lastFailureTime: number | null;
+        nextAttemptTime: number | null;
+        halfOpenCalls?: number;
+    };
+
+    const breakers = new Map<string, BreakerData>();
+    const getOrCreate = (provider: string): BreakerData => {
+        const existing = breakers.get(provider);
+        if (existing) return existing;
+
+        const fresh: BreakerData = {
+            provider,
+            state: 'closed',
+            failureCount: 0,
+            lastFailureTime: null,
+            nextAttemptTime: null,
+            halfOpenCalls: 0
+        };
+        breakers.set(provider, fresh);
+        return fresh;
+    };
+
+    const stub = {
         fetch: async (request: Request) => {
             const url = new URL(request.url);
             const path = url.pathname;
 
             if (path === '/check') {
-                return new Response(JSON.stringify({ allowed: true, state: 'closed' }), {
+                const body = await request.json() as { provider?: string };
+                const data = getOrCreate(body.provider || 'unknown');
+                if (data.state === 'open' && data.nextAttemptTime !== null && Date.now() >= data.nextAttemptTime) {
+                    data.state = 'half-open';
+                    data.halfOpenCalls = 0;
+                }
+                if (data.state === 'half-open') {
+                    if ((data.halfOpenCalls || 0) >= 1) {
+                        return new Response(JSON.stringify({
+                            allowed: false,
+                            reason: 'Circuit breaker is HALF_OPEN with the maximum number of probes in flight',
+                            state: data.state
+                        }), { status: 503, headers: { 'Content-Type': 'application/json' } });
+                    }
+                    data.halfOpenCalls = (data.halfOpenCalls || 0) + 1;
+                }
+                if (data.state === 'open') {
+                    return new Response(JSON.stringify({
+                        allowed: false,
+                        reason: 'Circuit breaker is OPEN',
+                        state: data.state
+                    }), { status: 503, headers: { 'Content-Type': 'application/json' } });
+                }
+                return new Response(JSON.stringify({ allowed: true, state: data.state }), {
+                    status: 200,
+                    headers: { 'Content-Type': 'application/json' }
+                });
+            }
+            if (path === '/recordSuccess') {
+                const body = await request.json() as { provider?: string };
+                const data = getOrCreate(body.provider || 'unknown');
+                data.state = 'closed';
+                data.failureCount = 0;
+                data.lastFailureTime = null;
+                data.nextAttemptTime = null;
+                data.halfOpenCalls = 0;
+                return new Response(JSON.stringify({ success: true, state: data.state }), {
+                    status: 200,
+                    headers: { 'Content-Type': 'application/json' }
+                });
+            }
+            if (path === '/recordFailure') {
+                const body = await request.json() as { provider?: string };
+                const data = getOrCreate(body.provider || 'unknown');
+                data.failureCount += 1;
+                data.lastFailureTime = Date.now();
+                if (data.state === 'half-open' || data.failureCount >= 5) {
+                    data.state = 'open';
+                    data.nextAttemptTime = Date.now() + 60000;
+                    data.halfOpenCalls = 0;
+                }
+                return new Response(JSON.stringify({ success: true, state: data.state }), {
+                    status: 200,
+                    headers: { 'Content-Type': 'application/json' }
+                });
+            }
+            if (path === '/reset') {
+                const body = await request.json() as { provider?: string };
+                const data = getOrCreate(body.provider || 'unknown');
+                data.state = 'closed';
+                data.failureCount = 0;
+                data.lastFailureTime = null;
+                data.nextAttemptTime = null;
+                data.halfOpenCalls = 0;
+                return new Response(JSON.stringify({ success: true, state: data.state }), {
                     status: 200,
                     headers: { 'Content-Type': 'application/json' }
                 });
             }
             if (path === '/status') {
-                return new Response(JSON.stringify({ breakers: [] }), {
-                    status: 200,
-                    headers: { 'Content-Type': 'application/json' }
-                });
-            }
-            if (path === '/recordSuccess' || path === '/recordFailure' || path === '/reset') {
-                return new Response(JSON.stringify({ success: true }), {
+                return new Response(JSON.stringify({ breakers: Array.from(breakers.values()) }), {
                     status: 200,
                     headers: { 'Content-Type': 'application/json' }
                 });
@@ -91,7 +175,7 @@ export function createMockCircuitBreaker(): DurableObjectNamespace {
     };
 
     return {
-        get: () => mockStub,
+        get: () => stub,
         idFromName: () => ({ toString: () => 'mock-id' }),
         idFromString: () => ({ toString: () => 'mock-id' }),
         newUniqueId: () => ({ toString: () => 'mock-id' })

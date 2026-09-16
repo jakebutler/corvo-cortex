@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import type { Env } from '../types';
 import { adminAuthMiddleware } from '../middleware/auth';
+import { circuitBreakerInstanceId } from '../durable-objects/circuit-breaker';
 
 const healthApp = new Hono<{ Bindings: Env }>();
 
@@ -18,7 +19,7 @@ healthApp.get('/providers', async (c) => {
     }, 501);
   }
 
-  const stub = c.env.CIRCUIT_BREAKER.get(c.env.CIRCUIT_BREAKER.idFromName('status'));
+  const stub = c.env.CIRCUIT_BREAKER.get(c.env.CIRCUIT_BREAKER.idFromName(circuitBreakerInstanceId()));
   const response = await stub.fetch(
     new Request('https://circuit-breaker/status', {
       method: 'GET'
@@ -48,7 +49,7 @@ healthApp.post('/reset/:provider', async (c) => {
     }, 501);
   }
 
-  const stub = c.env.CIRCUIT_BREAKER.get(c.env.CIRCUIT_BREAKER.idFromName(provider));
+  const stub = c.env.CIRCUIT_BREAKER.get(c.env.CIRCUIT_BREAKER.idFromName(circuitBreakerInstanceId()));
   const response = await stub.fetch(
     new Request('https://circuit-breaker/reset', {
       method: 'POST',
