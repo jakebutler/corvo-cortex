@@ -17,6 +17,7 @@ import { estimateCostFromUsage, estimateRequestMaxCost } from '../services/prici
 import { createStreamingResponseWithUsage } from '../utils/streaming';
 import { fetchWithRetry } from '../utils/retry';
 import { circuitBreakerInstanceId } from '../durable-objects/circuit-breaker';
+import { buildUpstreamErrorEnvelope, classifyUnknownUpstreamError, logUpstreamError, logUpstreamException } from '../utils/error-sanitizer';
 
 const responsesApp = new Hono<{ Bindings: Env; Variables: Variables }>();
 
@@ -214,10 +215,14 @@ responsesApp.post('/', async (c) => {
       await settleReservation(0);
 
       const errorText = await response.text();
+      logUpstreamError(route.provider, response.status, errorText);
+      updateTelemetryMetadata(c, route.provider, model, rawBody, {
+        upstream_error: errorText.slice(0, 2000)
+      });
       const errorPayload = {
         error: 'Provider error',
         provider: route.provider,
-        details: errorText
+        details: buildUpstreamErrorEnvelope(route.provider, response.status)
       };
       storeResponseData(c, errorPayload);
       return c.json(errorPayload, response.status as 400 | 500 | 502 | 503);
@@ -324,10 +329,15 @@ responsesApp.post('/', async (c) => {
     await settleReservation(estimateForReservation);
     await recordCircuitBreakerFailure(c.env, provider);
 
+    logUpstreamException(provider, error);
+    updateTelemetryMetadata(c, provider, model, rawBody, {
+      upstream_error: (error instanceof Error ? error.message : String(error)).slice(0, 2000)
+    });
+
     const errorPayload = {
       error: 'Failed to complete request',
       provider,
-      details: error instanceof Error ? error.message : 'Unknown error'
+      details: classifyUnknownUpstreamError(error)
     };
     storeResponseData(c, errorPayload);
     return c.json(errorPayload, 500);

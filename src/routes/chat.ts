@@ -43,6 +43,7 @@ import {
   validateStrictSchemaPayload
 } from '../services/schema-validation';
 import { buildCorvoCortexHeaders } from '../utils/corvo-cortex-headers';
+import { buildUpstreamErrorEnvelope, classifyUnknownUpstreamError, logUpstreamError, logUpstreamException } from '../utils/error-sanitizer';
 import {
   acquireProviderConcurrencyLease,
   releaseProviderConcurrencyLease
@@ -311,6 +312,7 @@ async function handleHeaderDrivenRequest(
         if (reservationId) void releaseCreditsReservation(c.env, route.provider, reservationId);
         await recordCircuitBreakerFailure(c.env, route.provider);
         const details = await response.text().catch(() => 'Unknown upstream error');
+        logUpstreamError(route.provider, response.status, details);
         return classifyStatusFailure(response.status, details);
       }
 
@@ -794,10 +796,15 @@ async function handleLegacyRequest(
 
       await recordCircuitBreakerFailure(c.env, route.provider);
 
+      logUpstreamError(route.provider, response.status, errorText);
+      updateTelemetryMetadata(c, route.provider, model, rawBody, {
+        upstream_error: errorText.slice(0, 2000)
+      });
+
       const errorPayload = {
         error: 'Provider error',
         provider: route.provider,
-        details: errorText
+        details: buildUpstreamErrorEnvelope(route.provider, response.status)
       };
       storeResponseData(c, errorPayload);
       setCorvoHeadersOnContext(c, {
@@ -944,10 +951,15 @@ async function handleLegacyRequest(
     await settleReservation(estimateForReservation);
     await recordCircuitBreakerFailure(c.env, route.provider);
 
+    logUpstreamException(route.provider, error);
+    updateTelemetryMetadata(c, route.provider, model, rawBody, {
+      upstream_error: (error instanceof Error ? error.message : String(error)).slice(0, 2000)
+    });
+
     const errorPayload = {
       error: 'Failed to complete request',
       provider: route.provider,
-      details: error instanceof Error ? error.message : 'Unknown error'
+      details: classifyUnknownUpstreamError(error)
     };
     storeResponseData(c, errorPayload);
     setCorvoHeadersOnContext(c, {

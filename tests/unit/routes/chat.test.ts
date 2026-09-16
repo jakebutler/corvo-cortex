@@ -462,7 +462,6 @@ describe('Chat Route - /v1/chat/completions', () => {
             expect(json.error).toBe('Provider error');
             expect(json.provider).toBeDefined();
         });
-
         it('does not zero the ledger when a provider 400 mentions quota', async () => {
             const quotaEnv = createMockEnv({
                 CREDITS_ANTHROPIC: 'true',
@@ -561,8 +560,82 @@ describe('Chat Route - /v1/chat/completions', () => {
                 expect.anything()
             );
         });
-    });
 
+        it('returns a sanitized envelope instead of raw upstream error bodies', async () => {
+            const secretUpstreamBody = 'org_id=acct_SECRET123 internal_req=req_ZZ9 limit=12%';
+            const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+            globalThis.fetch = vi.fn().mockImplementation(async (url: string) => {
+                if (url.includes('openai.com')) {
+                    return new Response(JSON.stringify({ error: secretUpstreamBody }), {
+                        status: 429,
+                        headers: { 'Content-Type': 'application/json' }
+                    });
+                }
+                return new Response('Not found', { status: 404 });
+            });
+
+            const request = new Request('http://localhost/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${TEST_API_KEY}`
+                },
+                body: JSON.stringify({
+                    model: 'gpt-4o',
+                    messages: [{ role: 'user', content: 'Hello' }]
+                })
+            });
+
+            const response = await chatApp.fetch(request, mockEnv, mockExecutionCtx);
+            const json = await response.json() as { details: { provider: string; status: number; class: string } };
+
+            expect(response.status).toBe(429);
+            expect(JSON.stringify(json)).not.toContain('acct_SECRET123');
+            expect(JSON.stringify(json)).not.toContain('req_ZZ9');
+            expect(json.details).toEqual({
+                provider: 'openai-direct',
+                status: 429,
+                class: 'throttled'
+            });
+
+            const logged = consoleErrorSpy.mock.calls.map((call) => call.join(' ')).join('\n');
+            expect(logged).toContain('acct_SECRET123');
+            consoleErrorSpy.mockRestore();
+        });
+
+        it('sanitizes exception messages on network failure paths', async () => {
+            const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+            globalThis.fetch = vi.fn().mockImplementation(async () => {
+                throw new Error('connect ECONNREFUSED 10.1.2.3:443 secret-host.internal');
+            });
+
+            const request = new Request('http://localhost/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${TEST_API_KEY}`
+                },
+                body: JSON.stringify({
+                    model: 'gpt-4o',
+                    messages: [{ role: 'user', content: 'Hello' }]
+                })
+            });
+
+            const response = await chatApp.fetch(request, mockEnv, mockExecutionCtx);
+            const json = await response.json() as { details: { status: number; class: string } };
+
+            expect(response.status).toBe(500);
+            expect(JSON.stringify(json)).not.toContain('ECONNREFUSED');
+            expect(JSON.stringify(json)).not.toContain('secret-host.internal');
+            expect(json.details.class).toBe('upstream_error');
+
+            const logged = consoleErrorSpy.mock.calls.map((call) => call.join(' ')).join('\n');
+            expect(logged).toContain('ECONNREFUSED');
+            consoleErrorSpy.mockRestore();
+        });
+    });
     describe('Header-Driven Routing', () => {
         it('routes by x-kinisi headers and emits x-corvo-cortex metadata headers', async () => {
             const request = new Request('http://localhost/', {

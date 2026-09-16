@@ -303,6 +303,26 @@ Client Request
 | 403 | Forbidden | Admin access required |
 | 503 | Service unavailable | Circuit breaker open |
 
+### Upstream provider errors
+
+When an upstream provider call fails, the gateway never returns the provider's raw error body. Client-facing errors use a normalized, bounded envelope:
+
+```json
+{
+  "error": "Provider error",
+  "provider": "anthropic-direct",
+  "details": {
+    "provider": "anthropic-direct",
+    "status": 429,
+    "class": "throttled"
+  }
+}
+```
+
+`details.class` is one of: `bad_request`, `access_denied`, `payment_required`, `not_found`, `timeout`, `throttled`, `upstream_error`. For exceptions without an upstream status (network failures, timeouts), `status` is `408` (timeout-like) or `502`, and `class` is `timeout` or `upstream_error`.
+
+Raw upstream error bodies are retained server-side only: structured `console.error` logs and Langfuse telemetry metadata (`upstream_error`, truncated to 2,000 chars).
+
 ---
 
 ## Telemetry Runtime Note

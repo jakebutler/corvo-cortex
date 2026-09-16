@@ -157,4 +157,78 @@ describe('Responses Route - /v1/responses', () => {
 
         expect(response.status).toBe(400);
     });
+
+    it('returns a sanitized envelope instead of raw upstream error bodies', async () => {
+        const secretUpstreamBody = 'account_id=fw_SECRET789 request_id=req_AA1';
+        const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+        globalThis.fetch = vi.fn().mockImplementation(async (url: string) => {
+            if (url.includes('api.fireworks.ai')) {
+                return new Response(JSON.stringify({ error: secretUpstreamBody }), {
+                    status: 400,
+                    headers: { 'Content-Type': 'application/json' }
+                });
+            }
+            return new Response('Not found', { status: 404 });
+        });
+
+        const request = new Request('http://localhost/', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${TEST_API_KEY}`
+            },
+            body: JSON.stringify({
+                model: 'accounts/fireworks/models/llama-v3p1-8b-instruct',
+                input: 'Hello'
+            })
+        });
+
+        const response = await responsesApp.fetch(request, mockEnv, mockExecutionCtx);
+        const json = await response.json() as { details: { provider: string; status: number; class: string } };
+
+        expect(response.status).toBe(400);
+        expect(JSON.stringify(json)).not.toContain('fw_SECRET789');
+        expect(JSON.stringify(json)).not.toContain('req_AA1');
+        expect(json.details).toEqual({
+            provider: 'fireworks',
+            status: 400,
+            class: 'bad_request'
+        });
+
+        const logged = consoleErrorSpy.mock.calls.map((call) => call.join(' ')).join('\n');
+        expect(logged).toContain('fw_SECRET789');
+        consoleErrorSpy.mockRestore();
+    });
+
+    it('sanitizes exception messages on network failure paths', async () => {
+        const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+        globalThis.fetch = vi.fn().mockImplementation(async () => {
+            throw new Error('connection refused to fw-internal.edge.example');
+        });
+
+        const request = new Request('http://localhost/', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${TEST_API_KEY}`
+            },
+            body: JSON.stringify({
+                model: 'accounts/fireworks/models/llama-v3p1-8b-instruct',
+                input: 'Hello'
+            })
+        });
+
+        const response = await responsesApp.fetch(request, mockEnv, mockExecutionCtx);
+        const json = await response.json() as { details: { status: number; class: string } };
+
+        expect(response.status).toBe(500);
+        expect(JSON.stringify(json)).not.toContain('fw-internal.edge.example');
+        expect(json.details.class).toBe('upstream_error');
+
+        const logged = consoleErrorSpy.mock.calls.map((call) => call.join(' ')).join('\n');
+        expect(logged).toContain('fw-internal.edge.example');
+        consoleErrorSpy.mockRestore();
+    });
 });
